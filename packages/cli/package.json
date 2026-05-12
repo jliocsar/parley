@@ -1,0 +1,19 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@parley/cli",
+  "private": true,
+  "bin": {
+    "parley": "./src/bin/parley.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@effect/cli": "^0.75.1",
+    "@effect/platform-bun": "^0.89.0",
+    "@parley/api": "workspace:*",
+    "@parley/client": "workspace:*",
+    "@parley/config": "workspace:*",
+    "@parley/mcp": "workspace:*"
+  }
+}

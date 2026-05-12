@@ -1,0 +1,32 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@parley/api",
+  "private": true,
+  "exports": {
+    "./domain": "./src/domain/index.ts",
+    "./wire": "./src/wire/index.ts",
+    "./tools": "./src/tools/index.ts",
+    "./errors": "./src/errors/index.ts",
+    "./server": "./src/server/index.ts",
+    "./layers": "./src/layers.ts"
+  },
+  "bin": {
+    "parley-server": "./src/bin/parley-server.ts"
+  },
+  "scripts": {
+    "test": "bun test",
+    "start": "bun run ./src/bin/parley-server.ts run",
+    "db:generate": "bun x drizzle-kit generate",
+    "db:check": "bun x drizzle-kit check"
+  },
+  "dependencies": {
+    "@effect/cli": "^0.75.1",
+    "@effect/opentelemetry": "^0.63.0",
+    "@effect/platform-bun": "^0.89.0",
+    "@parley/config": "workspace:*",
+    "drizzle-orm": "^0.45.2"
+  },
+  "devDependencies": {
+    "drizzle-kit": "^0.31.10"
+  }
+}

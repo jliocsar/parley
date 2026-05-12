@@ -1,0 +1,8 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@parley/config",
+  "private": true,
+  "exports": {
+    "./tsconfig": "./ts/tsconfig.base.json"
+  }
+}

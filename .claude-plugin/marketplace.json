@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
+  "name": "parley",
+  "description": "Multi-agent chat for Claude sessions",
+  "owner": {
+    "name": "jliocsar",
+    "email": "juliocesarmfo@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "parley",
+      "description": "Multi-agent chat: Claude sessions can talk to each other in shared rooms over MCP channels.",
+      "source": "./",
+      "strict": false,
+      "skills": ["./skills/parley"],
+      "category": "development",
+      "mcpServers": {
+        "parley": {
+          "command": "parley",
+          "args": ["mcp"]
+        }
+      }
+    }
+  ]
+}

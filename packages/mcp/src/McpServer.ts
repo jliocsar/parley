@@ -1,0 +1,129 @@
+import { Server } from '@modelcontextprotocol/sdk/server/index.js'
+import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
+import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
+import { MCP_SERVER_INSTRUCTIONS } from '@parley/api/tools'
+import { ParleyClient } from '@parley/client'
+import { Cause, Effect, Exit, JSONSchema, Layer, Runtime, Schema, Stream } from 'effect'
+
+import { ChannelDelivery } from './ChannelDelivery'
+import { TOOLS, type ToolName } from './tools/registry'
+
+// MCP requires every tool's inputSchema to be a JSON-Schema object with `type: "object"`.
+// `JSONSchema.make(Schema.Struct({}))` emits `{ anyOf: [{type:'object'},{type:'array'}] }` which
+// MCP rejects. Normalise here so empty-arg tools get an explicit object shape.
+const toInputSchema = <A, I>(schema: Schema.Schema<A, I>) => {
+  const json = JSONSchema.make(schema) as unknown as Record<string, unknown>
+  return json.type === 'object'
+    ? (json as { type: 'object' })
+    : { type: 'object' as const, properties: {}, additionalProperties: false }
+}
+
+const inputSchemas = {
+  join_room: toInputSchema(TOOLS.join_room.args),
+  leave_room: toInputSchema(TOOLS.leave_room.args),
+  list_rooms: toInputSchema(TOOLS.list_rooms.args),
+  send_message: toInputSchema(TOOLS.send_message.args),
+  who_is_here: toInputSchema(TOOLS.who_is_here.args),
+} as const
+
+const isToolName = (name: string): name is ToolName => name in TOOLS
+
+const textContent = (value: unknown, isError = false) => ({
+  content: [{ type: 'text' as const, text: JSON.stringify(value) }],
+  ...(isError ? { isError: true } : {}),
+})
+
+const exitToContent = (exit: Exit.Exit<unknown, unknown>) =>
+  Exit.match(exit, {
+    onSuccess: (value) => textContent(value),
+    onFailure: (cause) =>
+      textContent(Cause.isFailType(cause) ? cause.error : { message: Cause.pretty(cause) }, true),
+  })
+
+export class McpServer extends Effect.Service<McpServer>()('McpServer', {
+  accessors: true,
+  dependencies: [ChannelDelivery.Default, ParleyClient.Default],
+  scoped: Effect.gen(function* () {
+    const channels = yield* ChannelDelivery
+    const client = yield* ParleyClient
+    const runtime = yield* Effect.runtime<never>()
+
+    yield* Effect.forkScoped(
+      Stream.runForEach(client.incoming, (event) =>
+        event._tag === 'room.message'
+          ? channels.deliverMessage(event)
+          : channels.deliverSystemError(event),
+      ),
+    )
+
+    const makeHandler = <A, AI, R, RI>(
+      schema: { args: Schema.Schema<A, AI>; result: Schema.Schema<R, RI> },
+      run: (args: A) => Effect.Effect<R, unknown, never>,
+    ) => {
+      const decode = Schema.decodeUnknown(schema.args)
+      const encode = Schema.encodeSync(schema.result)
+      return (args: Record<string, unknown>): Effect.Effect<unknown, unknown, never> =>
+        decode(args).pipe(Effect.flatMap(run), Effect.map(encode))
+    }
+
+    const handlers: {
+      [K in ToolName]: (args: Record<string, unknown>) => Effect.Effect<unknown, unknown, never>
+    } = {
+      join_room: makeHandler(TOOLS.join_room, (a) => client.joinRoom(a.room, a.nickname)),
+      leave_room: makeHandler(TOOLS.leave_room, (a) => client.leaveRoom(a.room)),
+      list_rooms: makeHandler(TOOLS.list_rooms, () => client.listRooms()),
+      send_message: makeHandler(TOOLS.send_message, (a) => client.sendMessage(a.room, a.body)),
+      who_is_here: makeHandler(TOOLS.who_is_here, (a) => client.whoIsHere(a.room)),
+    }
+
+    const server = new Server(
+      { name: 'parley', version: '0.0.0' },
+      {
+        capabilities: {
+          tools: {},
+          experimental: { 'claude/channel': {} },
+        },
+        instructions: MCP_SERVER_INSTRUCTIONS,
+      },
+    )
+
+    yield* channels.register(server)
+
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
+      tools: (Object.keys(TOOLS) as ToolName[]).map((key) => {
+        const t = TOOLS[key]
+        return {
+          name: t.name,
+          description: t.description,
+          inputSchema: inputSchemas[key],
+        }
+      }),
+    }))
+
+    server.setRequestHandler(CallToolRequestSchema, async (req) => {
+      const name = req.params.name
+
+      if (!isToolName(name)) {
+        return textContent({ code: 'UnknownTool', tool: name }, true)
+      }
+
+      const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      const exit = await Runtime.runPromiseExit(runtime)(handlers[name](args))
+      return exitToContent(exit)
+    })
+
+    const transport = new StdioServerTransport()
+
+    yield* Effect.acquireRelease(
+      Effect.promise(() => server.connect(transport)),
+      () => Effect.promise(() => server.close()),
+    )
+
+    return { server }
+  }),
+}) {}
+
+export const McpLive = McpServer.Default.pipe(
+  Layer.provideMerge(ChannelDelivery.Default),
+  Layer.provideMerge(ParleyClient.Default),
+)

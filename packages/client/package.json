@@ -1,0 +1,15 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@parley/client",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@parley/api": "workspace:*",
+    "@parley/config": "workspace:*"
+  }
+}

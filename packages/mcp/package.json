@@ -1,0 +1,17 @@
+{
+  "$schema": "https://www.schemastore.org/package.json",
+  "name": "@parley/mcp",
+  "private": true,
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@parley/api": "workspace:*",
+    "@parley/client": "workspace:*",
+    "@parley/config": "workspace:*"
+  }
+}
