@@ -16,7 +16,9 @@ Parley lets you ask one Claude instance to "say hi to the other one in `#plannin
 - [Packages](#packages)
 - [Install — marketplace (users)](#install--marketplace-users)
 - [Install — development mode (contributors)](#install--development-mode-contributors)
+- [Compiled binaries](#compiled-binaries)
 - [Running a server](#running-a-server)
+- [Running as a service (systemd / launchd)](#running-as-a-service-systemd--launchd)
 - [CLI reference](#cli-reference)
 - [MCP tools](#mcp-tools)
 - [Configuration](#configuration)
@@ -31,7 +33,7 @@ Parley lets you ask one Claude instance to "say hi to the other one in `#plannin
 - **Session** — one `parley mcp` process ≡ one Session. Tracked by the server. Room memberships live on the Session and die with the process.
 - **Nickname** — display name an Agent uses inside a Room. Per-Room uniqueness. Server auto-assigns an adjective-animal pair (e.g. `clever-otter`) if you omit one.
 
-Delivery is **at-least-once with idempotent `message_id`**. Bodies are never persisted; the server keeps a small per-Session ring buffer (~64 unacked messages) for transient WS reconnects. Bodies cap at 8 KiB. Per-Session rate limit: ~10 msgs/sec (burst 20).
+Delivery is **at-least-once with idempotent `message_id`**. The sending Session does **not** receive its own message back through the channel — the `send_message` RPC response (`{ seq, messageId, sentAt }`) is the canonical delivery confirmation. Bodies are never persisted; the server keeps a small per-Session ring buffer (~64 unacked messages) for transient WS reconnects. Bodies cap at 8 KiB. Per-Session rate limit: ~10 msgs/sec (burst 20).
 
 Loopback binds (`127.0.0.1`) disable auth — running `parley-server` on your laptop with default flags is the canonical local-dev mode. Non-loopback binds **always** require a bearer token.
 
@@ -240,6 +242,27 @@ The PostToolUse hook at `.claude/hooks/biome-post-edit.sh` runs `biome check --w
 
 ---
 
+## Compiled binaries
+
+Parley ships two `bun build --compile --bytecode` binaries — `parley` (from `@parley/cli`) and `parley-server` (from `@parley/api`) — built independently. Each is a single self-contained file; the server binary embeds its Drizzle migrations at build time via [`comptime.ts`](https://comptime.js.org/) and auto-applies pending migrations on every `parley-server run`. See [`docs/adr/0008`](docs/adr/0008-bytecode-compiled-binaries-with-embedded-migrations.md).
+
+```shell
+bun run build:bin     # builds packages/cli/dist/parley and packages/api/dist/parley-server
+bun run install:bin   # symlinks both into $XDG_BIN_HOME (default ~/.local/bin)
+```
+
+`install:bin` is strictly a symlink step — run `build:bin` first, or pass `--build`:
+
+```shell
+bun run install:bin -- --build
+```
+
+The install target honors `$XDG_BIN_HOME` and falls back to `~/.local/bin`. It refuses to overwrite a non-symlink at the target (so it won't blow away a `bun install -g`-installed `parley`), replaces existing symlinks, and warns when the chosen directory isn't on `$PATH`.
+
+Adding a migration after a binary already exists is the usual two-command flow — `bun --filter @parley/api db:generate` followed by `bun run build:bin`. No source edits.
+
+---
+
 ## Running a server
 
 Operators run `parley-server` (the binary lives in `@parley/api`).
@@ -272,11 +295,43 @@ parley-server token list
 parley-server token revoke --label alice
 ```
 
-Run migrations on first boot (or after schema bumps):
+Migrations run automatically on every `parley-server run` (embedded in the compiled binary; idempotent against `__drizzle_migrations`). The explicit `parley-server db migrate` command is still available as a diagnostic / pre-flight, but you don't need to run it before `run`:
 
 ```shell
 parley-server db migrate
 ```
+
+---
+
+## Running as a service (systemd / launchd)
+
+The `parley-server service` subcommands install Parley as a **user-level** service on Linux (`systemctl --user`) and macOS (`launchctl`). System-level installs are intentionally not offered — see [`docs/adr/0009`](docs/adr/0009-service-installs-are-user-level-only.md). The compiled `parley-server` binary must already be on `$PATH` (run `bun run install:bin` first).
+
+```shell
+parley-server service install        # install + enable + start
+parley-server service status         # native systemctl / launchctl output
+parley-server service logs           # -f by default, --no-follow / -n 200
+parley-server service restart        # also: start, stop
+parley-server service uninstall      # add --purge to also remove ~/.config/parley/server.env
+```
+
+Configuration lives in `~/.config/parley/server.env` (referenced by systemd's `EnvironmentFile=`; sourced from a small shell stub on launchd). Edit it and run `service restart`:
+
+```shell
+# ~/.config/parley/server.env
+PARLEY_PORT=7070
+PARLEY_BIND=127.0.0.1
+# PARLEY_DB_FILE=
+# OTEL_EXPORTER_OTLP_ENDPOINT=
+```
+
+On systemd, the service is per-user and stops at logout unless you opt into lingering:
+
+```shell
+loginctl enable-linger $USER   # one-time, optional
+```
+
+Linux distros without `systemctl --user` (Alpine, WSL pre-systemd) error out with a clear message at `install` time — Parley still runs fine via `parley-server run` directly.
 
 ---
 
@@ -298,11 +353,12 @@ Config lives at `~/.config/parley/servers.toml`. You don't need to create it for
 
 | Command | Purpose |
 |---|---|
-| `parley-server run` | Start the WS server. |
-| `parley-server db migrate` | Apply pending Drizzle migrations. |
+| `parley-server run` | Start the WS server (auto-migrates the DB on every boot). |
+| `parley-server db migrate` | Apply pending embedded migrations explicitly (no-op when up to date). |
 | `parley-server token issue --label <name>` | Mint a bearer token (printed once). |
 | `parley-server token list` | List token labels and creation times. |
 | `parley-server token revoke --label <name>` | Revoke a token. |
+| `parley-server service { install \| uninstall \| start \| stop \| restart \| status \| logs }` | Manage Parley as a user-level systemd / launchd service. |
 
 ---
 
@@ -362,7 +418,8 @@ url = "ws://127.0.0.1:6969"
 ├── .claude-plugin/
 │   └── marketplace.json     # marketplace manifest + inline plugin entry (skill + parley mcp)
 ├── skills/parley/           # host-Claude usage skill
-├── docs/adr/                # architecture decision records (0001–0007)
+├── docs/adr/                # architecture decision records (0001–0009)
+├── scripts/install-bins.ts  # symlinks compiled binaries into $XDG_BIN_HOME
 ├── packages/
 │   ├── api/                 # @parley/api  — domain, wire, server, parley-server bin
 │   ├── client/              # @parley/client — Effect WS client

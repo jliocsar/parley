@@ -64,8 +64,12 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
     const enqueueAndPush = Effect.fn('FanoutService.enqueueAndPush')(function* (
       room: RoomName,
       event: RoomMessageEvent,
+      senderSessionId?: SessionId,
     ) {
-      const recipients = yield* memberships.membersOf(room)
+      const allRecipients = yield* memberships.membersOf(room)
+      const recipients = senderSessionId
+        ? allRecipients.filter((m) => m.sessionId !== senderSessionId)
+        : allRecipients
       const payload = yield* Effect.sync(() => JSON.stringify(encodeRoomMessage(event)))
 
       yield* Effect.forEach(

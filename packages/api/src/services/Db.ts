@@ -5,6 +5,7 @@ import { ServerConfig } from '../config'
 import * as schema from '../db/schema'
 
 export type DbHandle = BunSQLiteDatabase<typeof schema>
+export type DbClient = Database
 
 export class Db extends Effect.Service<Db>()('Db', {
   accessors: true,
@@ -25,6 +26,6 @@ export class Db extends Effect.Service<Db>()('Db', {
 
     const run = <A>(f: (h: DbHandle) => Promise<A>) => Effect.tryPromise(() => f(handle))
 
-    return { handle, run }
+    return { handle, client, run }
   }),
 }) {}

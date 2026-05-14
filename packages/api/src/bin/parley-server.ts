@@ -1,26 +1,27 @@
 #!/usr/bin/env bun
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
 import { Command, Options } from '@effect/cli'
 import { BunContext, BunRuntime } from '@effect/platform-bun'
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
 import { Effect, Layer } from 'effect'
 
+import pkg from '../../package.json' with { type: 'comptime+json' }
 import { ServerConfig } from '../config'
 import { AuthLabel } from '../domain/ids'
 import { AdminLive, ServerLive } from '../layers'
+import { runEmbeddedMigrations } from '../migrations/run'
 import { WsServer } from '../server/WsServer'
+import { service } from '../service/commands'
 import { ensureLocalServerEntry } from '../services/ConfigBootstrap'
 import { Db } from '../services/Db'
 import { TokenService } from '../services/TokenService'
-
-const MIGRATIONS_FOLDER = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', 'drizzle')
 
 const run = Command.make('run', {}, () =>
   Effect.gen(function* () {
     const cfg = yield* ServerConfig
     yield* ensureLocalServerEntry({ bind: cfg.bind, port: cfg.port })
+
+    const db = yield* Db
+    yield* runEmbeddedMigrations(db.client)
+
     yield* WsServer
     return yield* Effect.never
   }).pipe(Effect.provide(ServerLive)),
@@ -66,28 +67,21 @@ const token = Command.make('token').pipe(
 
 const dbMigrate = Command.make('migrate', {}, () =>
   Effect.gen(function* () {
-    yield* Effect.logInfo(`Running pending migrations from ${MIGRATIONS_FOLDER}…`)
     const db = yield* Db
+    const result = yield* runEmbeddedMigrations(db.client)
 
-    yield* Effect.tryPromise({
-      try: () =>
-        Promise.resolve(
-          migrate(db.handle, {
-            migrationsFolder: MIGRATIONS_FOLDER,
-            migrationsTable: '__drizzle_migrations',
-          }),
-        ),
-      catch: (e) => new Error(`migration failed: ${e instanceof Error ? e.message : String(e)}`),
-    })
-
-    yield* Effect.logInfo('Migrations complete.')
+    if (result.applied === 0) {
+      yield* Effect.logInfo(`Already up to date (${result.total} migration(s) embedded).`)
+    } else {
+      yield* Effect.logInfo(`Applied ${result.applied} migration(s).`)
+    }
   }).pipe(Effect.provide(AdminLive)),
 )
 
 const db = Command.make('db').pipe(Command.withSubcommands([dbMigrate]))
 
-const main = Command.make('parley-server').pipe(Command.withSubcommands([run, token, db]))
+const main = Command.make('parley-server').pipe(Command.withSubcommands([run, token, db, service]))
 
-const cli = Command.run(main, { name: 'parley-server', version: '0.0.0' })
+const cli = Command.run(main, { name: 'parley-server', version: pkg.version })
 
 cli(process.argv).pipe(Effect.provide(Layer.mergeAll(BunContext.layer)), BunRuntime.runMain)

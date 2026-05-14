@@ -1,12 +1,14 @@
 {
   "$schema": "https://www.schemastore.org/package.json",
   "name": "@parley/cli",
+  "version": "0.1.0",
   "private": true,
   "bin": {
     "parley": "./src/bin/parley.ts"
   },
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "build:bin": "bun run ./scripts/build.ts"
   },
   "dependencies": {
     "@effect/cli": "^0.75.1",

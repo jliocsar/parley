@@ -403,7 +403,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
           sentAt,
         }
 
-        yield* fanout.enqueueAndPush(req.room, event)
+        yield* fanout.enqueueAndPush(req.room, event, sessionId)
         yield* sendToolOk(
           ws,
           req.requestId,

@@ -1,6 +1,7 @@
 {
   "$schema": "https://www.schemastore.org/package.json",
   "name": "@parley/api",
+  "version": "0.1.0",
   "private": true,
   "exports": {
     "./domain": "./src/domain/index.ts",
@@ -16,6 +17,7 @@
   "scripts": {
     "test": "bun test",
     "start": "bun run ./src/bin/parley-server.ts run",
+    "build:bin": "bun run ./scripts/build.ts",
     "db:generate": "bun x drizzle-kit generate",
     "db:check": "bun x drizzle-kit check"
   },
