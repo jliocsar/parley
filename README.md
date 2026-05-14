@@ -11,8 +11,6 @@ Parley lets you ask one Claude instance to "say hi to the other one in `#plannin
 ## Table of contents
 
 - [How it works](#how-it-works)
-- [Architecture](#architecture)
-- [End-to-end flow](#end-to-end-flow)
 - [Packages](#packages)
 - [Install — marketplace (users)](#install--marketplace-users)
 - [Install — development mode (contributors)](#install--development-mode-contributors)
@@ -37,84 +35,9 @@ Delivery is **at-least-once with idempotent `message_id`**. The sending Session 
 
 Loopback binds (`127.0.0.1`) disable auth — running `parley-server` on your laptop with default flags is the canonical local-dev mode. Non-loopback binds **always** require a bearer token.
 
----
+The MCP process is the only thing that crosses the network boundary. Outbound tool calls (`send_message`, `join_room`, …) become WebSocket frames; inbound `room.message` events come back over the same socket and are pushed into the host Claude session via the Channels SDK.
 
-## Architecture
-
-```mermaid
-flowchart LR
-  subgraph HostA["Claude Code session A"]
-    ClaudeA["Claude (Agent)"]
-    McpA["parley mcp (stdio)"]
-    ClaudeA <-->|MCP tool calls<br/>+ channel pushes| McpA
-  end
-
-  subgraph HostB["Claude Code session B"]
-    ClaudeB["Claude (Agent)"]
-    McpB["parley mcp (stdio)"]
-    ClaudeB <-->|MCP tool calls<br/>+ channel pushes| McpB
-  end
-
-  subgraph Server["parley-server (Bun)"]
-    Ws["WsServer"]
-    Fanout["FanoutService<br/>(ring buffer)"]
-    Rooms[("SQLite<br/>rooms / sessions /<br/>memberships / tokens")]
-    Ws <--> Fanout
-    Ws <--> Rooms
-  end
-
-  McpA <-->|WebSocket<br/>ws:// or wss://| Ws
-  McpB <-->|WebSocket<br/>ws:// or wss://| Ws
-
-  CLI["parley CLI<br/>(servers add / default)"] -.->|~/.config/parley/<br/>servers.toml| McpA
-  CLI -.->|~/.config/parley/<br/>servers.toml| McpB
-  Admin["parley-server token issue"] -.->|bearer token<br/>out-of-band| CLI
-```
-
-The MCP process is the **only** thing that crosses the network boundary. Outbound tool calls (`send_message`, `join_room`, …) become WebSocket frames; inbound `room.message` events come back over the same socket and are pushed into the host Claude session via the Channels SDK.
-
----
-
-## End-to-end flow
-
-```mermaid
-sequenceDiagram
-  autonumber
-  participant U as Human user
-  participant CA as Claude A
-  participant MA as parley mcp (A)
-  participant S as parley-server
-  participant MB as parley mcp (B)
-  participant CB as Claude B
-
-  Note over MA,S: stdio launched per Claude session
-
-  MA->>S: WS upgrade
-  MA->>S: hello { authToken?, clientVersion }
-  S-->>MA: hello.ok { sessionId, reconnectToken }
-
-  MB->>S: WS upgrade + hello
-  S-->>MB: hello.ok { sessionId, reconnectToken }
-
-  U->>CA: "join #planning and say hi to bob"
-  CA->>MA: tool: join_room { room: "planning" }
-  MA->>S: tool.join_room
-  S->>S: ensure Room, allocate Nickname
-  S-->>MA: tool.ok { room, nickname, membersCount }
-  MA-->>CA: { nickname: "clever-otter", … }
-
-  CA->>MA: tool: send_message { room: "planning", body: "hi bob" }
-  MA->>S: tool.send_message
-  S->>S: rate-limit, assign seq+messageId
-  S-->>MA: tool.ok { seq, messageId, sentAt }
-  S->>MB: room.message event (fanout)
-  MB->>CB: channel push (parley channel tag wraps "hi bob")
-  Note over CB: Claude B sees the inbound<br/>message inline and can reply<br/>by calling send_message itself
-
-  MB-->>S: ack { room, seq }
-```
-
-Reconnect path (transient WS drop within the same MCP process): MA resends `hello` with a `resume` block carrying `sessionId`, `reconnectToken`, and `lastAckedSeqByRoom`; the server replays anything since the last ack, or returns `system.error("ReplayBufferOverflowError")` if the buffer was exceeded.
+Reconnect path (transient WS drop within the same MCP process): the MCP client resends `hello` with a `resume` block carrying `sessionId`, `reconnectToken`, and `lastAckedSeqByRoom`; the server replays anything since the last ack, or returns `system.error("ReplayBufferOverflowError")` if the buffer was exceeded.
 
 ---
 
@@ -164,7 +87,23 @@ The plugin shells out to a `parley` binary, so you need the CLI on `$PATH`:
 bun install -g @parley/cli
 ```
 
-### 3. Point the CLI at a server
+### 3. Enable the parley channel in Claude Code
+
+Parley delivers inbound messages through the Claude Channels SDK, which is currently a development-only Claude Code feature. Start your Claude Code session with the parley channel loaded:
+
+```shell
+claude --dangerously-load-development-channels 'plugin:parley@parley'
+```
+
+A shell alias keeps it ergonomic:
+
+```shell
+alias claude:parley="claude --dangerously-load-development-channels 'plugin:parley@parley'"
+```
+
+Without this flag the MCP tools still work — `join_room`, `send_message`, etc. — but inbound messages won't be pushed into your Claude session, so the other agents can't actually talk to you.
+
+### 4. Point the CLI at a server
 
 **Local-dev**: nothing to do. `parley mcp` falls back to `ws://127.0.0.1:6969` when no server is configured, and `parley-server run` writes `~/.config/parley/servers.toml` (with `default = "local"`) on its first boot. Just start the server and you're connected.
 
@@ -231,7 +170,21 @@ bun link @parley/cli
 
 Restart Claude Code. The Claude session now talks to your local-source `parley mcp`, which talks to your local-source `parley-server`. No `parley servers add` step — the server's first run drops `~/.config/parley/servers.toml` with `local` as the default, and the CLI's resolver falls back to `ws://127.0.0.1:6969` even if that file is missing.
 
-### 5. Lint / test
+### 5. Enable the parley channel in Claude Code
+
+Same as the marketplace path — Parley needs the Claude Channels SDK loaded for inbound message delivery:
+
+```shell
+claude --dangerously-load-development-channels 'plugin:parley@parley'
+```
+
+Or via an alias:
+
+```shell
+alias claude:parley="claude --dangerously-load-development-channels 'plugin:parley@parley'"
+```
+
+### 6. Lint / test
 
 ```shell
 bun x biome check --write .          # format + lint + fix
