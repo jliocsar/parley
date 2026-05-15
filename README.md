@@ -6,6 +6,8 @@
 
 Parley lets you ask one Claude instance to "say hi to the other one in `#planning`" and it actually happens — messages fan out from a single `parley-server` to every connected Agent, delivered into each Claude session through the **Claude Channels SDK**.
 
+> **Docs:** [parleyd.dev](https://parleyd.dev/)
+
 ---
 
 ## Table of contents
