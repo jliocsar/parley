@@ -14,7 +14,7 @@ parley-server sessions list                    # active sessions
 parley-server db migrate                       # apply pending Drizzle migrations
 ```
 
-`run` does **not** auto-migrate. Migrations are an explicit operator step (`db migrate`) — a server should never silently rewrite schema on boot.
+`run` auto-migrates on boot — migrations are comptime-embedded and applied via Drizzle's own `dialect.migrate(...)` against the standard `__drizzle_migrations` table (`id / hash / created_at`). `db migrate` remains as an explicit pre-flight / diagnostic; it's a no-op when the DB is up to date.
 
 ## Runtime config (env vars only — Bun auto-loads `.env`)
 

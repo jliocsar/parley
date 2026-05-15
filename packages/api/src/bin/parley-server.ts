@@ -20,7 +20,7 @@ const run = Command.make('run', {}, () =>
     yield* ensureLocalServerEntry({ bind: cfg.bind, port: cfg.port })
 
     const db = yield* Db
-    yield* runEmbeddedMigrations(db.client)
+    yield* runEmbeddedMigrations(db.handle)
 
     yield* WsServer
     return yield* Effect.never
@@ -68,7 +68,7 @@ const token = Command.make('token').pipe(
 const dbMigrate = Command.make('migrate', {}, () =>
   Effect.gen(function* () {
     const db = yield* Db
-    const result = yield* runEmbeddedMigrations(db.client)
+    const result = yield* runEmbeddedMigrations(db.handle)
 
     if (result.applied === 0) {
       yield* Effect.logInfo(`Already up to date (${result.total} migration(s) embedded).`)

@@ -4,7 +4,7 @@ import { Effect } from 'effect'
 import { ServerConfig } from '../config'
 import * as schema from '../db/schema'
 
-export type DbHandle = BunSQLiteDatabase<typeof schema>
+export type DbHandle = BunSQLiteDatabase<typeof schema> & { $client: Database }
 export type DbClient = Database
 
 export class Db extends Effect.Service<Db>()('Db', {

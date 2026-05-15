@@ -1,72 +1,58 @@
+import type { Database } from 'bun:sqlite'
 import { Effect } from 'effect'
 
-import type { DbClient } from '../services/Db'
+import type { DbHandle } from '../services/Db'
 import { embeddedMigrations } from './embedded'
-
-const STATEMENT_BREAKPOINT = /-->\s*statement-breakpoint/g
-
-const ensureMigrationsTable = (client: DbClient) => {
-  client.run(`
-    CREATE TABLE IF NOT EXISTS __drizzle_migrations (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      tag TEXT NOT NULL UNIQUE,
-      created_at INTEGER NOT NULL
-    )
-  `)
-}
-
-const appliedTags = (client: DbClient): Set<string> => {
-  const rows = client.query('SELECT tag FROM __drizzle_migrations').all() as { tag: string }[]
-
-  return new Set(rows.map((r) => r.tag))
-}
-
-const applyMigration = (client: DbClient, tag: string, sql: string) => {
-  const statements = sql
-    .split(STATEMENT_BREAKPOINT)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-
-  const tx = client.transaction(() => {
-    for (const stmt of statements) {
-      client.run(stmt)
-    }
-
-    client.run('INSERT INTO __drizzle_migrations (tag, created_at) VALUES (?, ?)', [
-      tag,
-      Date.now(),
-    ])
-  })
-
-  tx()
-}
 
 export type MigrationResult = {
   readonly applied: number
   readonly total: number
-  readonly appliedTags: readonly string[]
 }
 
-export const runEmbeddedMigrations = Effect.fn('runEmbeddedMigrations')(function* (
-  client: DbClient,
-) {
-  yield* Effect.sync(() => ensureMigrationsTable(client))
-  const applied = yield* Effect.sync(() => appliedTags(client))
-  const pending = embeddedMigrations.filter((m) => !applied.has(m.tag))
+type DialectMigrate = {
+  readonly dialect: {
+    migrate(migrations: typeof embeddedMigrations, session: unknown): void
+  }
+  readonly session: unknown
+}
 
-  if (pending.length === 0) {
-    yield* Effect.logDebug(`Migrations up to date (${embeddedMigrations.length} applied).`)
-    return { applied: 0, total: embeddedMigrations.length, appliedTags: [] }
+export const runEmbeddedMigrations = Effect.fn('runEmbeddedMigrations')(function* (db: DbHandle) {
+  const total = embeddedMigrations.length
+
+  if (total === 0) {
+    yield* Effect.logDebug('No embedded migrations to apply.')
+
+    return { applied: 0, total }
   }
 
-  yield* Effect.logInfo(`Applying ${pending.length} migration(s)…`)
-  const appliedNow: string[] = []
+  const applied = yield* Effect.sync(() => {
+    const internals = db as unknown as DialectMigrate
+    const before = countAppliedMigrations(db.$client)
 
-  for (const m of pending) {
-    yield* Effect.sync(() => applyMigration(client, m.tag, m.sql))
-    yield* Effect.logInfo(`  ✓ ${m.tag}`)
-    appliedNow.push(m.tag)
+    internals.dialect.migrate(embeddedMigrations, internals.session)
+
+    const after = countAppliedMigrations(db.$client)
+
+    return after - before
+  })
+
+  if (applied === 0) {
+    yield* Effect.logDebug(`Migrations up to date (${total} embedded).`)
+  } else {
+    yield* Effect.logInfo(`Applied ${applied} migration(s) (${total} embedded).`)
   }
 
-  return { applied: pending.length, total: embeddedMigrations.length, appliedTags: appliedNow }
+  return { applied, total }
 })
+
+function countAppliedMigrations(client: Database): number {
+  try {
+    const row = client.query('SELECT COUNT(*) AS c FROM __drizzle_migrations').get() as
+      | { c: number }
+      | undefined
+
+    return row?.c ?? 0
+  } catch {
+    return 0
+  }
+}
