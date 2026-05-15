@@ -1,6 +1,6 @@
 <rule-server-state-mutable-hashmap>
 
-Server-local registries (`MembershipRegistry`, `SessionRegistry`, `RateLimiter`, `FanoutService`) hold in-memory state. They use `MutableHashMap` from `effect`, not `Ref<HashMap>`.
+Process-local registries that hold in-memory state use `MutableHashMap` from `effect`, not `Ref<HashMap>`. Current call sites: server side — `MembershipRegistry`, `SessionRegistry`, `RateLimiter`, `FanoutService`; client side — `ParleyClient` (pending tool-call deferreds). The same reasoning applies to per-room/per-session sequence trackers — prefer a plain `Map<K, V>` over `Ref<Record<K, V>>` when no fiber-snapshot semantics are exercised.
 
 <why>
 

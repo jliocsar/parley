@@ -5,7 +5,6 @@ import { CryptoService } from './services/Crypto'
 import { Db } from './services/Db'
 import { FanoutService } from './services/FanoutService'
 import { MembershipRegistry } from './services/MembershipRegistry'
-import { NicknameGenerator } from './services/NicknameGenerator'
 import { RateLimiter } from './services/RateLimiter'
 import { RoomRepo } from './services/RoomRepo'
 import { SessionRegistry } from './services/SessionRegistry'
@@ -22,7 +21,6 @@ export const DomainLive = Layer.mergeAll(
   MembershipRegistry.Default,
   FanoutService.Default,
   RateLimiter.Default,
-  NicknameGenerator.Default,
 )
 
 export const ServerLive = WsServer.Default.pipe(

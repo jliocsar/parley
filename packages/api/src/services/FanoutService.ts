@@ -40,26 +40,24 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
       return fresh
     }
 
-    const nextSeqFor = Effect.fn('FanoutService.nextSeqFor')(function* (room: RoomName) {
-      return yield* Effect.sync(() => {
+    const appendToBuffer = (sessionId: SessionId, room: RoomName, event: RoomMessageEvent) => {
+      const buf = getOrInitBuffer(sessionId)
+      const queue = buf.perRoom.get(room) ?? []
+      queue.push(event)
+
+      if (queue.length > REPLAY_BUFFER_SIZE) {
+        queue.splice(0, queue.length - REPLAY_BUFFER_SIZE)
+      }
+
+      buf.perRoom.set(room, queue)
+    }
+
+    const nextSeqFor = (room: RoomName) =>
+      Effect.sync(() => {
         const next = Option.getOrElse(MutableHashMap.get(roomSeqs, room), () => 1)
         MutableHashMap.set(roomSeqs, room, next + 1)
         return next
-      })
-    })
-
-    const appendToBuffer = (sessionId: SessionId, room: RoomName, event: RoomMessageEvent) =>
-      Effect.sync(() => {
-        const buf = getOrInitBuffer(sessionId)
-        const queue = buf.perRoom.get(room) ?? []
-        queue.push(event)
-
-        if (queue.length > REPLAY_BUFFER_SIZE) {
-          queue.splice(0, queue.length - REPLAY_BUFFER_SIZE)
-        }
-
-        buf.perRoom.set(room, queue)
-      })
+      }).pipe(Effect.withSpan('FanoutService.nextSeqFor'))
 
     const enqueueAndPush = Effect.fn('FanoutService.enqueueAndPush')(function* (
       room: RoomName,
@@ -70,35 +68,20 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
       const recipients = senderSessionId
         ? allRecipients.filter((m) => m.sessionId !== senderSessionId)
         : allRecipients
-      const payload = yield* Effect.sync(() => JSON.stringify(encodeRoomMessage(event)))
+      const payload = JSON.stringify(encodeRoomMessage(event))
 
       yield* Effect.forEach(
         recipients,
         ({ sessionId }) =>
-          Effect.gen(function* () {
-            yield* appendToBuffer(sessionId, room, event)
-
-            const session = yield* sessions.get(sessionId)
-            const sock = Option.flatMap(session, (s) => s.socket)
-
-            if (Option.isSome(sock)) {
-              yield* Effect.sync(() => {
-                try {
-                  sock.value.send(payload)
-                } catch {}
-              })
-            }
-          }),
+          Effect.sync(() => appendToBuffer(sessionId, room, event)).pipe(
+            Effect.zipRight(sessions.sendTo(sessionId, payload)),
+          ),
         { concurrency: 16, discard: true },
       )
     })
 
-    const ackUpTo = Effect.fn('FanoutService.ackUpTo')(function* (
-      sessionId: SessionId,
-      room: RoomName,
-      seq: number,
-    ) {
-      yield* Effect.sync(() => {
+    const ackUpTo = (sessionId: SessionId, room: RoomName, seq: number) =>
+      Effect.sync(() => {
         const buf = MutableHashMap.get(buffers, sessionId)
 
         if (Option.isNone(buf)) {
@@ -115,25 +98,25 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         }
 
         buf.value.lastAckedSeqByRoom.set(room, seq)
-      })
-    })
-
-    type RoomReplay =
-      | { readonly overflow: true; readonly room: RoomName }
-      | { readonly overflow: false; readonly events: readonly RoomMessageEvent[] }
+      }).pipe(Effect.withSpan('FanoutService.ackUpTo'))
 
     const replayRoom = (
       room: RoomName,
       queue: readonly RoomMessageEvent[],
       clientLastSeq: number,
-    ): RoomReplay => {
+    ): Effect.Effect<readonly RoomMessageEvent[], ReplayBufferOverflowError> => {
       const oldestBuffered = queue[0]?.seq ?? clientLastSeq + 1
 
       if (oldestBuffered > clientLastSeq + 1) {
-        return { overflow: true, room }
+        return Effect.fail(
+          new ReplayBufferOverflowError({
+            room,
+            message: `Messages were dropped during disconnect for room ${room}`,
+          }),
+        )
       }
 
-      return { overflow: false, events: queue.filter((e) => e.seq > clientLastSeq) }
+      return Effect.succeed(queue.filter((e) => e.seq > clientLastSeq))
     }
 
     const replay = Effect.fn('FanoutService.replay')(function* (
@@ -146,27 +129,17 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         return [] as RoomMessageEvent[]
       }
 
-      const toReplay: RoomMessageEvent[] = []
+      const groups = yield* Effect.forEach(Array.from(buf.value.perRoom), ([room, queue]) =>
+        replayRoom(room, queue, lastAckedSeqByRoom[room as string] ?? 0),
+      )
 
-      for (const [room, queue] of buf.value.perRoom) {
-        const result = replayRoom(room, queue, lastAckedSeqByRoom[room as string] ?? 0)
-
-        if (result.overflow) {
-          return yield* new ReplayBufferOverflowError({
-            room: result.room,
-            message: `Messages were dropped during disconnect for room ${result.room}`,
-          })
-        }
-
-        toReplay.push(...result.events)
-      }
-
-      return toReplay
+      return groups.flat()
     })
 
-    const dropSession = Effect.fn('FanoutService.dropSession')(function* (sessionId: SessionId) {
-      yield* Effect.sync(() => MutableHashMap.remove(buffers, sessionId))
-    })
+    const dropSession = (sessionId: SessionId) =>
+      Effect.sync(() => MutableHashMap.remove(buffers, sessionId)).pipe(
+        Effect.withSpan('FanoutService.dropSession'),
+      )
 
     return { nextSeqFor, enqueueAndPush, ackUpTo, replay, dropSession }
   }),

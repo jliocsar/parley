@@ -40,7 +40,12 @@ export class RoomRepo extends Effect.Service<RoomRepo>()('RoomRepo', {
       )
 
       const fresh = yield* findByName(name)
-      return Option.getOrThrowWith(fresh, () => new Error('room ensure: post-insert lookup failed'))
+
+      return yield* Option.match(fresh, {
+        onNone: () =>
+          Effect.die(new Error(`RoomRepo.ensure: post-insert lookup failed for ${name}`)),
+        onSome: Effect.succeed,
+      })
     })
 
     const listAll = Effect.fn('RoomRepo.listAll')(function* () {

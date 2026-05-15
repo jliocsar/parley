@@ -17,7 +17,7 @@ import {
   type ToolOkRes,
   ToolRequestId,
 } from '@parley/api/wire'
-import { Deferred, Effect, HashMap, Option, PubSub, Ref, Schema, Stream } from 'effect'
+import { Deferred, Effect, MutableHashMap, Option, PubSub, Ref, Schema, Stream } from 'effect'
 
 import { Handshake } from './Handshake'
 import { WsConnection } from './WsConnection'
@@ -58,30 +58,19 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
     const state = yield* Ref.make<Option.Option<ClientState>>(Option.none())
     const events = yield* PubSub.unbounded<ParleyEvent>()
-    const pending = yield* Ref.make(
-      HashMap.empty<ToolRequestId, Deferred.Deferred<ToolOkRes, ToolErrRes>>(),
-    )
-    const lastSeqByRoom = yield* Ref.make<Record<string, number>>({})
+    const pending = MutableHashMap.empty<ToolRequestId, Deferred.Deferred<ToolOkRes, ToolErrRes>>()
+    const lastSeqByRoom = new Map<string, number>()
 
-    const completeOk = (frame: ToolOkRes) =>
+    const settlePending = <F extends ToolOkRes | ToolErrRes>(
+      frame: F,
+      finish: (def: Deferred.Deferred<ToolOkRes, ToolErrRes>, frame: F) => Effect.Effect<unknown>,
+    ) =>
       Effect.gen(function* () {
-        const map = yield* Ref.get(pending)
-        const def = HashMap.get(map, frame.requestId)
+        const def = MutableHashMap.get(pending, frame.requestId)
 
         if (Option.isSome(def)) {
-          yield* Deferred.succeed(def.value, frame)
-          yield* Ref.update(pending, HashMap.remove(frame.requestId))
-        }
-      })
-
-    const completeErr = (frame: ToolErrRes) =>
-      Effect.gen(function* () {
-        const map = yield* Ref.get(pending)
-        const def = HashMap.get(map, frame.requestId)
-
-        if (Option.isSome(def)) {
-          yield* Deferred.fail(def.value, frame)
-          yield* Ref.update(pending, HashMap.remove(frame.requestId))
+          MutableHashMap.remove(pending, frame.requestId)
+          yield* finish(def.value, frame)
         }
       })
 
@@ -98,7 +87,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
         switch (frame._tag) {
           case 'room.message': {
-            yield* Ref.update(lastSeqByRoom, (m) => ({ ...m, [frame.room]: frame.seq }))
+            lastSeqByRoom.set(frame.room, frame.seq)
             yield* PubSub.publish(events, frame)
             return
           }
@@ -109,12 +98,12 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
           }
 
           case 'tool.ok': {
-            yield* completeOk(frame)
+            yield* settlePending(frame, (def, f) => Deferred.succeed(def, f))
             return
           }
 
           case 'tool.err': {
-            yield* completeErr(frame)
+            yield* settlePending(frame, (def, f) => Deferred.fail(def, f))
             return
           }
         }
@@ -128,9 +117,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
           return
         }
 
-        if (inbound._tag === 'server') {
-          yield* processInbound(inbound.raw)
-        }
+        yield* processInbound(inbound.value)
       }
     }).pipe(Effect.catchAllCause((c) => Effect.logError('client pump crashed', c)))
 
@@ -141,7 +128,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       Effect.gen(function* () {
         const requestId = makeReqId()
         const def = yield* Deferred.make<ToolOkRes, ToolErrRes>()
-        yield* Ref.update(pending, HashMap.set(requestId, def))
+        MutableHashMap.set(pending, requestId, def)
         yield* ws.send(makeFrame(requestId))
         const res = yield* Deferred.await(def)
         return yield* decode(res.result)
@@ -214,11 +201,10 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
     const sessionInfo = Effect.fn('ParleyClient.sessionInfo')(function* () {
       const s = yield* Ref.get(state)
-      const seqs = yield* Ref.get(lastSeqByRoom)
       return Option.map(s, (c) => ({
         sessionId: c.sessionId,
         reconnectToken: c.reconnectToken,
-        lastAckedSeqByRoom: seqs,
+        lastAckedSeqByRoom: Object.fromEntries(lastSeqByRoom),
       }))
     })
 

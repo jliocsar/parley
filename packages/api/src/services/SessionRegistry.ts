@@ -19,42 +19,55 @@ export class SessionRegistry extends Effect.Service<SessionRegistry>()('SessionR
   effect: Effect.gen(function* () {
     const store = MutableHashMap.empty<SessionId, SessionState>()
 
-    const updateSocket = (id: SessionId, socket: Option.Option<ServerWebSocket<SocketData>>) =>
+    const updateSocket = (id: SessionId, socket: Option.Option<ServerWebSocket<SocketData>>) => {
+      const existing = MutableHashMap.get(store, id)
+
+      if (Option.isSome(existing)) {
+        MutableHashMap.set(store, id, { ...existing.value, socket })
+      }
+    }
+
+    const register = (state: SessionState) =>
+      Effect.sync(() => MutableHashMap.set(store, state.id, state)).pipe(
+        Effect.withSpan('SessionRegistry.register'),
+      )
+
+    const get = (id: SessionId) =>
+      Effect.sync(() => MutableHashMap.get(store, id)).pipe(Effect.withSpan('SessionRegistry.get'))
+
+    const attachSocket = (id: SessionId, socket: ServerWebSocket<SocketData>) =>
+      Effect.sync(() => updateSocket(id, Option.some(socket))).pipe(
+        Effect.withSpan('SessionRegistry.attachSocket'),
+      )
+
+    const detachSocket = (id: SessionId) =>
+      Effect.sync(() => updateSocket(id, Option.none())).pipe(
+        Effect.withSpan('SessionRegistry.detachSocket'),
+      )
+
+    const remove = (id: SessionId) =>
+      Effect.sync(() => MutableHashMap.remove(store, id)).pipe(
+        Effect.withSpan('SessionRegistry.remove'),
+      )
+
+    const list = () =>
+      Effect.sync(() => Array.from(MutableHashMap.values(store))).pipe(
+        Effect.withSpan('SessionRegistry.list'),
+      )
+
+    const sendTo = (id: SessionId, payload: string) =>
       Effect.sync(() => {
-        const existing = MutableHashMap.get(store, id)
+        const session = MutableHashMap.get(store, id)
 
-        if (Option.isSome(existing)) {
-          MutableHashMap.set(store, id, { ...existing.value, socket })
+        if (Option.isNone(session) || Option.isNone(session.value.socket)) {
+          return
         }
-      })
 
-    const register = Effect.fn('SessionRegistry.register')(function* (state: SessionState) {
-      yield* Effect.sync(() => MutableHashMap.set(store, state.id, state))
-    })
+        try {
+          session.value.socket.value.send(payload)
+        } catch {}
+      }).pipe(Effect.withSpan('SessionRegistry.sendTo'))
 
-    const get = Effect.fn('SessionRegistry.get')(function* (id: SessionId) {
-      return yield* Effect.sync(() => MutableHashMap.get(store, id))
-    })
-
-    const attachSocket = Effect.fn('SessionRegistry.attachSocket')(function* (
-      id: SessionId,
-      socket: ServerWebSocket<SocketData>,
-    ) {
-      yield* updateSocket(id, Option.some(socket))
-    })
-
-    const detachSocket = Effect.fn('SessionRegistry.detachSocket')(function* (id: SessionId) {
-      yield* updateSocket(id, Option.none())
-    })
-
-    const remove = Effect.fn('SessionRegistry.remove')(function* (id: SessionId) {
-      yield* Effect.sync(() => MutableHashMap.remove(store, id))
-    })
-
-    const list = Effect.fn('SessionRegistry.list')(function* () {
-      return yield* Effect.sync(() => Array.from(MutableHashMap.values(store)))
-    })
-
-    return { register, get, attachSocket, detachSocket, remove, list }
+    return { register, get, attachSocket, detachSocket, remove, list, sendTo }
   }),
 }) {}

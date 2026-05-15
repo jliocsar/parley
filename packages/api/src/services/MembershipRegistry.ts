@@ -52,12 +52,27 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
       MutableHashMap.set(sessionRooms, sessionId, new Set([room]))
     }
 
-    const join = Effect.fn('MembershipRegistry.join')(function* (
-      room: RoomName,
-      sessionId: SessionId,
-      nickname: Nickname,
-    ) {
-      return yield* Effect.sync((): JoinResult => {
+    const leaveSync = (room: RoomName, sessionId: SessionId) => {
+      const state = MutableHashMap.get(rooms, room)
+
+      if (Option.isSome(state)) {
+        const nick = state.value.bySession.get(sessionId)
+
+        if (nick !== undefined) {
+          state.value.bySession.delete(sessionId)
+          state.value.byNickname.delete(nick)
+        }
+      }
+
+      const set = MutableHashMap.get(sessionRooms, sessionId)
+
+      if (Option.isSome(set)) {
+        set.value.delete(room)
+      }
+    }
+
+    const join = (room: RoomName, sessionId: SessionId, nickname: Nickname) =>
+      Effect.sync((): JoinResult => {
         const state = getOrInitRoom(room)
         const owner = state.byNickname.get(nickname)
 
@@ -75,47 +90,28 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
         state.byNickname.set(nickname, sessionId)
         addSessionRoom(sessionId, room)
         return { ok: true }
-      })
-    })
+      }).pipe(Effect.withSpan('MembershipRegistry.join'))
 
-    const leave = Effect.fn('MembershipRegistry.leave')(function* (
-      room: RoomName,
-      sessionId: SessionId,
-    ) {
-      yield* Effect.sync(() => {
-        const state = MutableHashMap.get(rooms, room)
+    const leave = (room: RoomName, sessionId: SessionId) =>
+      Effect.sync(() => leaveSync(room, sessionId)).pipe(
+        Effect.withSpan('MembershipRegistry.leave'),
+      )
 
-        if (Option.isSome(state)) {
-          const nick = state.value.bySession.get(sessionId)
-
-          if (nick !== undefined) {
-            state.value.bySession.delete(sessionId)
-            state.value.byNickname.delete(nick)
-          }
-        }
-
+    const dropSession = (sessionId: SessionId) =>
+      Effect.sync(() => {
         const set = MutableHashMap.get(sessionRooms, sessionId)
 
         if (Option.isSome(set)) {
-          set.value.delete(room)
+          for (const room of set.value) {
+            leaveSync(room, sessionId)
+          }
         }
-      })
-    })
 
-    const dropSession = Effect.fn('MembershipRegistry.dropSession')(function* (
-      sessionId: SessionId,
-    ) {
-      const joined = yield* Effect.sync(() => {
-        const set = MutableHashMap.get(sessionRooms, sessionId)
-        return Option.isSome(set) ? Array.from(set.value) : []
-      })
+        MutableHashMap.remove(sessionRooms, sessionId)
+      }).pipe(Effect.withSpan('MembershipRegistry.dropSession'))
 
-      yield* Effect.forEach(joined, (room) => leave(room, sessionId), { discard: true })
-      yield* Effect.sync(() => MutableHashMap.remove(sessionRooms, sessionId))
-    })
-
-    const membersOf = Effect.fn('MembershipRegistry.membersOf')(function* (room: RoomName) {
-      return yield* Effect.sync(() => {
+    const membersOf = (room: RoomName) =>
+      Effect.sync(() => {
         const state = MutableHashMap.get(rooms, room)
 
         if (Option.isNone(state)) {
@@ -129,25 +125,36 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
             nickname,
           }),
         )
-      })
-    })
+      }).pipe(Effect.withSpan('MembershipRegistry.membersOf'))
 
-    const roomsOfSession = Effect.fn('MembershipRegistry.roomsOfSession')(function* (
-      sessionId: SessionId,
-    ) {
-      return yield* Effect.sync(() => {
+    const roomsOfSession = (sessionId: SessionId) =>
+      Effect.sync(() => {
         const set = MutableHashMap.get(sessionRooms, sessionId)
         return Option.isSome(set) ? new Set(set.value) : new Set<RoomName>()
-      })
-    })
+      }).pipe(Effect.withSpan('MembershipRegistry.roomsOfSession'))
 
-    const memberCount = Effect.fn('MembershipRegistry.memberCount')(function* (room: RoomName) {
-      return yield* Effect.sync(() => {
+    const memberCount = (room: RoomName) =>
+      Effect.sync(() => {
         const state = MutableHashMap.get(rooms, room)
         return Option.isSome(state) ? state.value.bySession.size : 0
-      })
-    })
+      }).pipe(Effect.withSpan('MembershipRegistry.memberCount'))
 
-    return { join, leave, dropSession, membersOf, roomsOfSession, memberCount }
+    const summarise = (room: RoomName, sessionId: SessionId) =>
+      Effect.sync(() => {
+        const state = MutableHashMap.get(rooms, room)
+
+        if (Option.isNone(state)) {
+          return { membersCount: 0, mine: Option.none<Nickname>() }
+        }
+
+        const mine = state.value.bySession.get(sessionId)
+
+        return {
+          membersCount: state.value.bySession.size,
+          mine: mine !== undefined ? Option.some(mine) : Option.none<Nickname>(),
+        }
+      }).pipe(Effect.withSpan('MembershipRegistry.summarise'))
+
+    return { join, leave, dropSession, membersOf, roomsOfSession, memberCount, summarise }
   }),
 }) {}

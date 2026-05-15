@@ -10,17 +10,15 @@ type Bucket = {
   readonly lastRefillMs: number
 }
 
+type ConsumeResult = { readonly ok: true } | { readonly ok: false; readonly retryAfterMs: number }
+
 export class RateLimiter extends Effect.Service<RateLimiter>()('RateLimiter', {
   accessors: true,
   effect: Effect.gen(function* () {
     const store = MutableHashMap.empty<SessionId, Bucket>()
 
-    type ConsumeResult =
-      | { readonly ok: true }
-      | { readonly ok: false; readonly retryAfterMs: number }
-
-    const tryConsume = Effect.fn('RateLimiter.tryConsume')(function* (id: SessionId) {
-      return yield* Effect.sync((): ConsumeResult => {
+    const tryConsume = (id: SessionId) =>
+      Effect.sync((): ConsumeResult => {
         const now = Date.now()
         const bucket = Option.getOrElse(MutableHashMap.get(store, id), () => ({
           tokens: CAPACITY,
@@ -37,12 +35,12 @@ export class RateLimiter extends Effect.Service<RateLimiter>()('RateLimiter', {
 
         MutableHashMap.set(store, id, { tokens: refilled - 1, lastRefillMs: now })
         return { ok: true }
-      })
-    })
+      }).pipe(Effect.withSpan('RateLimiter.tryConsume'))
 
-    const dropSession = Effect.fn('RateLimiter.dropSession')(function* (id: SessionId) {
-      yield* Effect.sync(() => MutableHashMap.remove(store, id))
-    })
+    const dropSession = (id: SessionId) =>
+      Effect.sync(() => MutableHashMap.remove(store, id)).pipe(
+        Effect.withSpan('RateLimiter.dropSession'),
+      )
 
     return { tryConsume, dropSession }
   }),

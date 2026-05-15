@@ -1,5 +1,3 @@
-import { Effect } from 'effect'
-
 import { Nickname } from '../domain/nickname'
 
 const ADJECTIVES = [
@@ -173,19 +171,8 @@ const pick = <T>(xs: readonly T[]): T => {
   return xs[idx] as T
 }
 
-const generate = () =>
-  Effect.sync(() => {
-    const adj = pick(ADJECTIVES)
-    const animal = pick(ANIMALS)
-    return Nickname.make(`${adj}-${animal}`)
-  }).pipe(Effect.withSpan('NicknameGenerator.generate'))
+export const generateNickname = (): Nickname =>
+  Nickname.make(`${pick(ADJECTIVES)}-${pick(ANIMALS)}`)
 
-const withSuffix = (base: Nickname, n: number) =>
-  Effect.sync(() => Nickname.make(`${base}-${n}`)).pipe(
-    Effect.withSpan('NicknameGenerator.withSuffix'),
-  )
-
-export class NicknameGenerator extends Effect.Service<NicknameGenerator>()('NicknameGenerator', {
-  accessors: true,
-  succeed: { generate, withSuffix },
-}) {}
+export const nicknameWithSuffix = (base: Nickname, n: number): Nickname =>
+  Nickname.make(`${base}-${n}`)

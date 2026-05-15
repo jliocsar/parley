@@ -7,10 +7,11 @@ import { SessionId } from '../domain/ids'
 import { MESSAGE_BODY_MAX_BYTES } from '../domain/message'
 import type { Nickname } from '../domain/nickname'
 import type { RoomName } from '../domain/room'
+import { AuthRequiredError, TokenRevokedError } from '../errors/auth'
 import { CryptoService } from '../services/Crypto'
 import { FanoutService } from '../services/FanoutService'
 import { MembershipRegistry } from '../services/MembershipRegistry'
-import { NicknameGenerator } from '../services/NicknameGenerator'
+import { generateNickname, nicknameWithSuffix } from '../services/NicknameGenerator'
 import { RateLimiter } from '../services/RateLimiter'
 import { RoomRepo } from '../services/RoomRepo'
 import { SessionRegistry } from '../services/SessionRegistry'
@@ -64,7 +65,6 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     MembershipRegistry.Default,
     FanoutService.Default,
     RateLimiter.Default,
-    NicknameGenerator.Default,
     CryptoService.Default,
   ],
   scoped: Effect.gen(function* () {
@@ -75,13 +75,21 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     const memberships = yield* MembershipRegistry
     const fanout = yield* FanoutService
     const rateLimiter = yield* RateLimiter
-    const nicknames = yield* NicknameGenerator
     const cryptoSvc = yield* CryptoService
 
     const runtime = yield* Effect.runtime<never>()
     const fork = <A, E>(eff: Effect.Effect<A, E, never>) => Runtime.runFork(runtime)(eff)
 
     const expiryFibers = new Map<SessionId, Fiber.RuntimeFiber<void, never>>()
+
+    yield* Effect.addFinalizer(() =>
+      Effect.gen(function* () {
+        yield* Effect.forEach(Array.from(expiryFibers.values()), Fiber.interrupt, {
+          discard: true,
+        })
+        expiryFibers.clear()
+      }),
+    )
 
     const safeSend = (ws: ServerWebSocket<WsData>, json: string) =>
       Effect.sync(() => {
@@ -125,32 +133,35 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       details?: unknown,
     ) => sendServerFrame(ws, { _tag: 'tool.err', requestId, code, message, details })
 
-    const runAuth = (token: BearerToken | undefined) =>
-      Effect.gen(function* () {
-        if (!config.authEnabled) {
-          return { ok: true as const, label: Option.none<AuthLabel>() }
-        }
+    const runAuth = (
+      token: BearerToken | undefined,
+    ): Effect.Effect<Option.Option<AuthLabel>, AuthRequiredError | TokenRevokedError> => {
+      if (!config.authEnabled) {
+        return Effect.succeed(Option.none<AuthLabel>())
+      }
 
-        if (token === undefined) {
-          return {
-            ok: false as const,
-            code: 'AuthRequiredError' as const,
-            message: 'Auth required',
-          }
-        }
+      if (token === undefined) {
+        return Effect.fail(new AuthRequiredError({ message: 'Auth required' }))
+      }
 
-        const result = yield* tokens.verify(token).pipe(Effect.either)
+      return tokens.verify(token).pipe(
+        Effect.map(Option.some),
+        Effect.catchAll((err) =>
+          err._tag === 'TokenRevokedError'
+            ? Effect.fail(err)
+            : Effect.fail(new TokenRevokedError({ label: '', message: err.message })),
+        ),
+      )
+    }
 
-        if (result._tag === 'Left') {
-          return {
-            ok: false as const,
-            code: 'TokenRevokedError' as const,
-            message: result.left.message,
-          }
-        }
-
-        return { ok: true as const, label: Option.some(result.right) }
-      })
+    const closeAuthFailure = (
+      ws: ServerWebSocket<WsData>,
+      code: 'AuthRequiredError' | 'TokenRevokedError',
+      message: string,
+    ) =>
+      sendHelloErr(ws, code, message).pipe(
+        Effect.zipRight(Effect.sync(() => ws.close(4000, 'auth failed'))),
+      )
 
     const handleResumeHello = (
       ws: ServerWebSocket<WsData>,
@@ -198,20 +209,13 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
     const handleFreshHello = (ws: ServerWebSocket<WsData>, hello: HelloFrame) =>
       Effect.gen(function* () {
-        const auth = yield* runAuth(hello.authToken)
-
-        if (!auth.ok) {
-          yield* sendHelloErr(ws, auth.code, auth.message)
-          yield* Effect.sync(() => ws.close(4000, 'auth failed'))
-          return
-        }
-
+        const label = yield* runAuth(hello.authToken)
         const reconnectToken = yield* cryptoSvc.issueReconnectToken()
         const sessionId = ws.data.sessionId
 
         yield* sessions.register({
           id: sessionId,
-          authLabel: auth.label,
+          authLabel: label,
           clientVersion: hello.clientVersion,
           connectedAt: new Date(),
           reconnectToken,
@@ -226,7 +230,12 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
           reconnectToken,
           serverVersion: SERVER_VERSION,
         })
-      })
+      }).pipe(
+        Effect.catchTags({
+          AuthRequiredError: (err) => closeAuthFailure(ws, 'AuthRequiredError', err.message),
+          TokenRevokedError: (err) => closeAuthFailure(ws, 'TokenRevokedError', err.message),
+        }),
+      )
 
     const handleHello = (ws: ServerWebSocket<WsData>, raw: unknown) =>
       Effect.gen(function* () {
@@ -250,11 +259,10 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
     const allocateNickname = (req: JoinRoomReq, sessionId: SessionId) =>
       Effect.gen(function* () {
-        const base = yield* nicknames.generate()
+        const base = generateNickname()
 
         for (let attempt = 1; attempt <= MAX_NICKNAME_ATTEMPTS; attempt++) {
-          const candidate: Nickname =
-            attempt === 1 ? base : yield* nicknames.withSuffix(base, attempt)
+          const candidate: Nickname = attempt === 1 ? base : nicknameWithSuffix(base, attempt)
           const result = yield* memberships.join(req.room, sessionId, candidate)
 
           if (result.ok) {
@@ -322,33 +330,23 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         yield* sendToolOk(ws, req.requestId, encodeLeaveResult({ room: req.room }))
       })
 
-    const summariseRoom = (room: RoomName, sessionId: SessionId) =>
-      Effect.gen(function* () {
-        const members = yield* memberships.membersOf(room)
-        const me = members.find((m) => m.sessionId === sessionId)
-        return { membersCount: members.length, mine: me?.nickname }
-      })
-
     const handleListRooms = (ws: ServerWebSocket<WsData>, req: ListRoomsReq) =>
       Effect.gen(function* () {
         const all = yield* rooms.listAll()
         const sessionId = ws.data.sessionId
 
-        const summaries = yield* Effect.forEach(all, (r) =>
-          summariseRoom(r.name, sessionId).pipe(Effect.map((s) => ({ name: r.name, ...s }))),
-        )
+        const joined: { name: RoomName; nickname: Nickname; membersCount: number }[] = []
+        const available: { name: RoomName; membersCount: number }[] = []
 
-        const joined = summaries
-          .filter((s) => s.mine !== undefined)
-          .map((s) => ({
-            name: s.name,
-            nickname: s.mine as Nickname,
-            membersCount: s.membersCount,
-          }))
+        for (const r of all) {
+          const { membersCount, mine } = yield* memberships.summarise(r.name, sessionId)
 
-        const available = summaries
-          .filter((s) => s.mine === undefined)
-          .map((s) => ({ name: s.name, membersCount: s.membersCount }))
+          if (Option.isSome(mine)) {
+            joined.push({ name: r.name, nickname: mine.value, membersCount })
+          } else {
+            available.push({ name: r.name, membersCount })
+          }
+        }
 
         yield* sendToolOk(ws, req.requestId, encodeListResult({ joined, available }))
       })

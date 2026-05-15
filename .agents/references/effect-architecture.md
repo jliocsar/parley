@@ -53,8 +53,7 @@ Pattern: every service uses `Effect.Service<Self>()(tag, { accessors: true, depe
 | `SessionRegistry` | in-memory | — | `session_id → SessionState` (auth label, socket handle, reconnect token, connectedAt). |
 | `MembershipRegistry` | in-memory | — | Room ↔ Session mapping with per-Room Nickname uniqueness. |
 | `RateLimiter` | in-memory | — | Token-bucket per Session (cap 20, refill 10/sec). |
-| `NicknameGenerator` | service | — | Returns random `adjective-animal` Nicknames; `withSuffix` appends `-N` on collision. Used by the `join_room` handler when the caller omits `nickname`. |
-| `FanoutService` | in-memory | `MembershipRegistry`, `SessionRegistry` | Assigns `(room, server_seq)`, fans out, holds the ≤64-entry replay ring buffer per (room, session). |
+| `FanoutService` | in-memory | `MembershipRegistry`, `SessionRegistry` | Assigns `(room, server_seq)`, fans out via `SessionRegistry.sendTo`, holds the ≤64-entry replay ring buffer per (room, session). |
 | `WsServer` | `scoped` infra | All of the above | Owns `Bun.serve`, accepts upgrades, drives handshake, routes frames. |
 | `TelemetryLive` | layer | `ServerConfig` | OTel exporter — no-op if `OTEL_EXPORTER_OTLP_ENDPOINT` is unset. |
 
@@ -62,8 +61,8 @@ Pattern: every service uses `Effect.Service<Self>()(tag, { accessors: true, depe
 
 | Service | Kind | Depends on | Purpose |
 |---|---|---|---|
-| `WsConnection` | `scoped` | — | Raw WebSocket lifecycle + inbound message Queue. |
-| `Handshake` | service | `WsConnection` | Sends `hello`, awaits `hello.ok` / `hello.err`. |
+| `WsConnection` | `scoped` | — | Raw WebSocket lifecycle. Emits a transport-only `{ raw } \| { closed }` stream — no protocol decoding. |
+| `Handshake` | service | `WsConnection` | Sends `hello`, decodes `hello.ok` / `hello.err` from the inbound stream. Owns the hello-response schema. |
 | `ParleyClient` | `scoped` | `WsConnection`, `Handshake` | High-level: `connect`, `joinRoom`, `leaveRoom`, `listRooms`, `sendMessage`, `whoIsHere`, `ack`, plus a `Stream` of inbound events. |
 
 ### `@parley/mcp` services
@@ -87,10 +86,12 @@ The matching server-side bootstrap lives in `@parley/api/services/ConfigBootstra
 
 ```
 ServerLive = WsServer.Default
-  ▷ Layer.provideMerge(DomainLive)         // TokenService, SessionRegistry, MembershipRegistry, FanoutService, RateLimiter, NicknameGenerator
+  ▷ Layer.provideMerge(DomainLive)         // TokenService, SessionRegistry, MembershipRegistry, FanoutService, RateLimiter
   ▷ Layer.provideMerge(RepoLive)           // RoomRepo, TokenRepo
   ▷ Layer.provideMerge(InfrastructureLive) // Db, CryptoService, TelemetryLive
 ```
+
+Nickname generation is a pair of pure functions in `services/NicknameGenerator.ts` (`generateNickname`, `nicknameWithSuffix`) — no service, no layer, called directly from the `join_room` handler when the caller omits `nickname`.
 
 ### Server admin (token CLI, db migrate)
 
@@ -115,7 +116,7 @@ Layer.mergeAll(McpLive, ClientLive, ServersConfig.Default)
 - **Always `Effect.Service`** for business logic; reserve `Context.Tag` for cases where the runtime injects a non-Effect resource we don't control.
 - **Always `Schema.TaggedError`** — every distinct failure mode gets its own error type. Don't collapse into a generic `RoomError`.
 - **Brand every ID** that crosses a package boundary. Plain `string` is forbidden for identifiers.
-- **Effect.fn with the dotted span name** for service methods (`'RoomRepo.ensure'`, `'FanoutService.enqueueAndPush'`). This is what powers OTel spans for free.
+- **Span the dotted method name** on service methods (`'RoomRepo.ensure'`, `'FanoutService.enqueueAndPush'`). Use `Effect.fn('Service.method')(function* …)` when the body is a real generator (multiple yields, conditional branches). Use `Effect.sync(…).pipe(Effect.withSpan('Service.method'))` when the body is a single sync read-modify-write — wrapping a one-line `Effect.sync` in a generator is pure ceremony. Both produce identical OTel spans.
 - **`Layer.mergeAll` for siblings, `Layer.provideMerge` for incremental chains.** Avoid nested `Layer.provide` chains — they explode TypeScript LSP types.
 - **No `JSON.parse` / `JSON.stringify` in hot paths.** Use `Schema.decodeUnknown` / `Schema.encodeUnknown` for wire frames — the Effect language service will flag the difference.
 - **No `process.env`** — use `Config.*` in `config.ts`.

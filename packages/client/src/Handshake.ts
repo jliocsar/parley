@@ -1,6 +1,6 @@
 import type { BearerToken, ReconnectToken, SessionId } from '@parley/api/domain'
-import type { HelloErrFrame, HelloOkFrame } from '@parley/api/wire'
-import { Effect, Option } from 'effect'
+import { type HelloErrFrame, HelloErrFrame as HelloErrSchema, HelloOkFrame } from '@parley/api/wire'
+import { Effect, Option, Schema } from 'effect'
 
 import { WsConnection } from './WsConnection'
 
@@ -14,6 +14,9 @@ export type HelloResult =
       readonly serverVersion: string
     }
   | { readonly _tag: 'err'; readonly frame: HelloErrFrame }
+
+const HelloResponseSchema = Schema.Union(HelloOkFrame, HelloErrSchema)
+const decodeHelloResponse = Schema.decodeUnknown(HelloResponseSchema)
 
 export class Handshake extends Effect.Service<Handshake>()('Handshake', {
   accessors: true,
@@ -39,25 +42,30 @@ export class Handshake extends Effect.Service<Handshake>()('Handshake', {
       while (true) {
         const inbound = yield* ws.take()
 
-        if (inbound._tag === 'hello.ok') {
-          const ok: HelloOkFrame = inbound.frame
+        if (inbound._tag === 'closed') {
+          return yield* Effect.die(new Error('Handshake: connection closed before reply'))
+        }
+
+        const decoded = yield* decodeHelloResponse(inbound.value).pipe(Effect.either)
+
+        if (decoded._tag === 'Left') {
+          continue
+        }
+
+        const frame = decoded.right
+
+        if (frame._tag === 'hello.ok') {
           const ret: HelloResult = {
             _tag: 'ok',
-            sessionId: ok.sessionId,
-            reconnectToken: ok.reconnectToken,
-            serverVersion: ok.serverVersion,
+            sessionId: frame.sessionId,
+            reconnectToken: frame.reconnectToken,
+            serverVersion: frame.serverVersion,
           }
           return ret
         }
 
-        if (inbound._tag === 'hello.err') {
-          const ret: HelloResult = { _tag: 'err', frame: inbound.frame }
-          return ret
-        }
-
-        if (inbound._tag === 'closed') {
-          return yield* Effect.die(new Error('Handshake: connection closed before reply'))
-        }
+        const ret: HelloResult = { _tag: 'err', frame }
+        return ret
       }
     })
 

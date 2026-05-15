@@ -1,12 +1,6 @@
 import type { BearerToken } from '@parley/api/domain'
-import {
-  type ClientFrame,
-  type HelloErrFrame,
-  HelloErrFrame as HelloErrSchema,
-  type HelloOkFrame,
-  HelloOkFrame as HelloOkSchema,
-} from '@parley/api/wire'
-import { Deferred, Effect, Option, Queue, Ref, Schema } from 'effect'
+import type { ClientFrame } from '@parley/api/wire'
+import { Deferred, Effect, Option, Queue, Ref, Runtime, Schema } from 'effect'
 
 export class WsConnectionError extends Schema.TaggedError<WsConnectionError>()(
   'WsConnectionError',
@@ -20,10 +14,8 @@ export type WsConfig = {
   readonly authToken: Option.Option<BearerToken>
 }
 
-type Inbound =
-  | { readonly _tag: 'hello.ok'; readonly frame: HelloOkFrame }
-  | { readonly _tag: 'hello.err'; readonly frame: HelloErrFrame }
-  | { readonly _tag: 'server'; readonly raw: unknown }
+export type Inbound =
+  | { readonly _tag: 'raw'; readonly value: unknown }
   | { readonly _tag: 'closed' }
 
 export class WsConnection extends Effect.Service<WsConnection>()('WsConnection', {
@@ -31,6 +23,8 @@ export class WsConnection extends Effect.Service<WsConnection>()('WsConnection',
   scoped: Effect.gen(function* () {
     const inbox = yield* Queue.unbounded<Inbound>()
     const socket = yield* Ref.make<Option.Option<WebSocket>>(Option.none())
+    const runtime = yield* Effect.runtime<never>()
+    const fork = <A, E>(eff: Effect.Effect<A, E, never>) => Runtime.runFork(runtime)(eff)
 
     const open = Effect.fn('WsConnection.open')(function* (config: WsConfig) {
       const headers: Record<string, string> = {}
@@ -43,11 +37,11 @@ export class WsConnection extends Effect.Service<WsConnection>()('WsConnection',
       const ready = yield* Deferred.make<void, WsConnectionError>()
 
       ws.onopen = () => {
-        void Effect.runFork(Deferred.succeed(ready, undefined))
+        fork(Deferred.succeed(ready, undefined))
       }
 
       ws.onerror = () => {
-        void Effect.runFork(
+        fork(
           Deferred.fail(
             ready,
             new WsConnectionError({ message: `WebSocket error connecting to ${config.url}` }),
@@ -57,21 +51,8 @@ export class WsConnection extends Effect.Service<WsConnection>()('WsConnection',
 
       ws.onmessage = (ev) => {
         try {
-          const parsed = JSON.parse(String(ev.data)) as { _tag?: string }
-
-          if (parsed._tag === 'hello.ok') {
-            const frame = Schema.decodeUnknownSync(HelloOkSchema)(parsed)
-            void inbox.unsafeOffer({ _tag: 'hello.ok', frame })
-            return
-          }
-
-          if (parsed._tag === 'hello.err') {
-            const frame = Schema.decodeUnknownSync(HelloErrSchema)(parsed)
-            void inbox.unsafeOffer({ _tag: 'hello.err', frame })
-            return
-          }
-
-          void inbox.unsafeOffer({ _tag: 'server', raw: parsed })
+          const parsed = JSON.parse(String(ev.data)) as unknown
+          void inbox.unsafeOffer({ _tag: 'raw', value: parsed })
         } catch {
           /* malformed frame — surfaced upstream as protocol error */
         }
