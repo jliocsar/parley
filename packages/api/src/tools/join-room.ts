@@ -8,10 +8,12 @@ export const TOOL_NAME = 'join_room' as const
 export const TOOL_DESCRIPTION =
   'Join a Parley Room by name. Creates the Room if it does not exist. Nickname is optional — when omitted, the server picks a random adjective-animal name (collision-resolved). Nickname uniqueness is per-Room.'
 
-export const Args = Schema.Struct({
+export const ArgsFields = {
   room: RoomName,
   nickname: Schema.optional(Nickname),
-})
+} as const
+
+export const Args = Schema.Struct(ArgsFields)
 export type Args = Schema.Schema.Type<typeof Args>
 
 export const Result = Schema.Struct({

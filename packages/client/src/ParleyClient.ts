@@ -42,6 +42,8 @@ const decodeWho = Schema.decodeUnknown(Tools.WhoIsHere.Result)
 type ClientState = {
   readonly sessionId: SessionId
   readonly reconnectToken: ReconnectToken
+  readonly url: string
+  readonly authToken: Option.Option<BearerToken>
 }
 
 const makeReqId = () => ToolRequestId.make(crypto.randomUUID())
@@ -59,7 +61,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
     const state = yield* Ref.make<Option.Option<ClientState>>(Option.none())
     const events = yield* PubSub.unbounded<ParleyEvent>()
     const pending = MutableHashMap.empty<ToolRequestId, Deferred.Deferred<ToolOkRes, ToolErrRes>>()
-    const lastSeqByRoom = new Map<string, number>()
+    const lastAckedSeqByRoom = new Map<string, number>()
 
     const settlePending = <F extends ToolOkRes | ToolErrRes>(
       frame: F,
@@ -87,7 +89,6 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
         switch (frame._tag) {
           case 'room.message': {
-            lastSeqByRoom.set(frame.room, frame.seq)
             yield* PubSub.publish(events, frame)
             return
           }
@@ -109,12 +110,62 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         }
       })
 
+    const reconnect = Effect.fn('ParleyClient.reconnect')(function* () {
+      const current = yield* Ref.get(state)
+
+      if (Option.isNone(current)) {
+        return false
+      }
+
+      yield* ws.open({ url: current.value.url, authToken: current.value.authToken })
+
+      const result = yield* handshake.send({
+        authToken: current.value.authToken,
+        resume: Option.some({
+          sessionId: current.value.sessionId,
+          reconnectToken: current.value.reconnectToken,
+          lastAckedSeqByRoom: Object.fromEntries(lastAckedSeqByRoom),
+        }),
+      })
+
+      if (result._tag === 'err') {
+        yield* PubSub.publish(events, {
+          _tag: 'system.error',
+          code: result.frame.code,
+          message: result.frame.message,
+        })
+        return false
+      }
+
+      yield* Ref.set(
+        state,
+        Option.some<ClientState>({
+          ...current.value,
+          sessionId: result.sessionId,
+          reconnectToken: result.reconnectToken,
+        }),
+      )
+
+      return true
+    })
+
     const pump: Effect.Effect<void, never, never> = Effect.gen(function* () {
       while (true) {
         const inbound = yield* ws.take()
 
         if (inbound._tag === 'closed') {
-          return
+          const resumed = yield* reconnect().pipe(Effect.either)
+
+          if (resumed._tag === 'Left') {
+            yield* Effect.logError('client reconnect failed', resumed.left)
+            return
+          }
+
+          if (!resumed.right) {
+            return
+          }
+
+          continue
         }
 
         yield* processInbound(inbound.value)
@@ -146,7 +197,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       })
 
       if (result._tag === 'err') {
-        return yield* handshakeErrToError(result.frame)
+        return yield* Effect.fail(handshakeErrToError(result.frame))
       }
 
       yield* Ref.set(
@@ -154,6 +205,8 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         Option.some<ClientState>({
           sessionId: result.sessionId,
           reconnectToken: result.reconnectToken,
+          url: params.url,
+          authToken: params.authToken,
         }),
       )
 
@@ -197,6 +250,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
     const ack = Effect.fn('ParleyClient.ack')(function* (room: RoomName, seq: number) {
       yield* ws.send({ _tag: 'ack', room, seq })
+      lastAckedSeqByRoom.set(room, seq)
     })
 
     const sessionInfo = Effect.fn('ParleyClient.sessionInfo')(function* () {
@@ -204,7 +258,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       return Option.map(s, (c) => ({
         sessionId: c.sessionId,
         reconnectToken: c.reconnectToken,
-        lastAckedSeqByRoom: Object.fromEntries(lastSeqByRoom),
+        lastAckedSeqByRoom: Object.fromEntries(lastAckedSeqByRoom),
       }))
     })
 

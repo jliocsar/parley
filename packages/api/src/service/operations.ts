@@ -13,7 +13,7 @@ import {
   SERVICE_LABEL,
   SYSTEMD_UNIT_PATH,
 } from './paths'
-import { detectPlatform } from './platform'
+import { detectPlatform, type Platform } from './platform'
 import { renderEnvFile, renderLaunchdPlist, renderSystemdUnit } from './templates'
 
 export class ServiceCommandError extends Data.TaggedError('ServiceCommandError')<{
@@ -101,56 +101,134 @@ const runCmd = (
 
 const launchdDomain = () => `gui/${process.getuid?.() ?? ''}`
 
+type PlatformCommands = {
+  readonly install: (binary: string) => Effect.Effect<void, ServiceCommandError>
+  readonly uninstall: Effect.Effect<void, ServiceCommandError>
+  readonly start: Effect.Effect<void, ServiceCommandError>
+  readonly stop: Effect.Effect<void, ServiceCommandError>
+  readonly restart: Effect.Effect<void, ServiceCommandError>
+  readonly status: Effect.Effect<void, ServiceCommandError>
+  readonly logs: (opts: {
+    follow: boolean
+    lines: number
+  }) => Effect.Effect<void, ServiceCommandError>
+}
+
+const serviceUnit = `${SERVICE_LABEL}.service`
+const launchdService = () => `${launchdDomain()}/${LAUNCHD_LABEL}`
+
+const platformCommands: Record<Platform, PlatformCommands> = {
+  systemd: {
+    install: (binary) =>
+      Effect.gen(function* () {
+        yield* writeFile(SYSTEMD_UNIT_PATH, renderSystemdUnit(binary))
+        yield* Effect.logInfo(`Wrote ${SYSTEMD_UNIT_PATH}`)
+        yield* runCmd(['systemctl', '--user', 'daemon-reload'], { failOnNonZero: true })
+        yield* runCmd(['systemctl', '--user', 'enable', '--now', serviceUnit], {
+          failOnNonZero: true,
+        })
+        yield* Effect.logInfo(`Service installed and started.`)
+        yield* Effect.logInfo(
+          `Tip: 'loginctl enable-linger $USER' lets the service survive logout (one-time, off by default).`,
+        )
+      }),
+    uninstall: Effect.gen(function* () {
+      yield* runCmd(['systemctl', '--user', 'disable', '--now', serviceUnit], { capture: true })
+      yield* removeFile(SYSTEMD_UNIT_PATH)
+      yield* runCmd(['systemctl', '--user', 'daemon-reload'], { capture: true })
+    }),
+    start: runCmd(['systemctl', '--user', 'start', serviceUnit], { failOnNonZero: true }).pipe(
+      Effect.asVoid,
+    ),
+    stop: runCmd(['systemctl', '--user', 'stop', serviceUnit], { failOnNonZero: true }).pipe(
+      Effect.asVoid,
+    ),
+    restart: runCmd(['systemctl', '--user', 'restart', serviceUnit], {
+      failOnNonZero: true,
+    }).pipe(Effect.asVoid),
+    status: runCmd(['systemctl', '--user', 'status', serviceUnit]).pipe(Effect.asVoid),
+    logs: (opts) => {
+      const args = [
+        'journalctl',
+        '--user',
+        '-u',
+        serviceUnit,
+        '-n',
+        String(opts.lines),
+        opts.follow ? '-f' : '--no-pager',
+      ]
+
+      return runCmd(args).pipe(Effect.asVoid)
+    },
+  },
+  launchd: {
+    install: (binary) =>
+      Effect.gen(function* () {
+        yield* Effect.tryPromise({
+          try: () => mkdir(LAUNCHD_LOG_DIR, { recursive: true }),
+          catch: (e) =>
+            new ServiceCommandError({
+              message: `Failed to create ${LAUNCHD_LOG_DIR}: ${
+                e instanceof Error ? e.message : String(e)
+              }`,
+            }),
+        })
+
+        yield* writeFile(LAUNCHD_PLIST_PATH, renderLaunchdPlist(binary))
+        yield* Effect.logInfo(`Wrote ${LAUNCHD_PLIST_PATH}`)
+
+        const domain = launchdDomain()
+        yield* runCmd(['launchctl', 'bootout', domain, LAUNCHD_PLIST_PATH], { capture: true })
+        yield* runCmd(['launchctl', 'bootstrap', domain, LAUNCHD_PLIST_PATH], {
+          failOnNonZero: true,
+        })
+        yield* Effect.logInfo(`Service installed and started.`)
+      }),
+    uninstall: Effect.gen(function* () {
+      yield* runCmd(['launchctl', 'bootout', launchdDomain(), LAUNCHD_PLIST_PATH], {
+        capture: true,
+      })
+      yield* removeFile(LAUNCHD_PLIST_PATH)
+    }),
+    start: runCmd(['launchctl', 'kickstart', '-k', launchdService()], {
+      failOnNonZero: true,
+    }).pipe(Effect.asVoid),
+    stop: runCmd(['launchctl', 'kill', 'TERM', launchdService()], {
+      failOnNonZero: true,
+    }).pipe(Effect.asVoid),
+    restart: runCmd(['launchctl', 'kickstart', '-k', launchdService()], {
+      failOnNonZero: true,
+    }).pipe(Effect.asVoid),
+    status: runCmd(['launchctl', 'print', launchdService()]).pipe(Effect.asVoid),
+    logs: (opts) => {
+      const args = ['tail']
+
+      if (opts.follow) {
+        args.push('-F')
+      }
+
+      args.push('-n', String(opts.lines), LAUNCHD_ERR_LOG, LAUNCHD_OUT_LOG)
+      return runCmd(args).pipe(Effect.asVoid)
+    },
+  },
+}
+
+const withPlatform = <A>(
+  f: (commands: PlatformCommands) => Effect.Effect<A, ServiceCommandError>,
+) =>
+  Effect.gen(function* () {
+    const platform = yield* detectPlatform()
+    return yield* f(platformCommands[platform])
+  }).pipe(Effect.withSpan('service.withPlatform'))
+
 export const install = Effect.fn('service.install')(function* () {
-  const platform = yield* detectPlatform()
   const binary = yield* resolveBinaryPath()
   yield* ensureEnvFile()
-
-  if (platform === 'systemd') {
-    yield* writeFile(SYSTEMD_UNIT_PATH, renderSystemdUnit(binary))
-    yield* Effect.logInfo(`Wrote ${SYSTEMD_UNIT_PATH}`)
-    yield* runCmd(['systemctl', '--user', 'daemon-reload'], { failOnNonZero: true })
-    yield* runCmd(['systemctl', '--user', 'enable', '--now', `${SERVICE_LABEL}.service`], {
-      failOnNonZero: true,
-    })
-    yield* Effect.logInfo(`Service installed and started.`)
-    yield* Effect.logInfo(
-      `Tip: 'loginctl enable-linger $USER' lets the service survive logout (one-time, off by default).`,
-    )
-
-    return
-  }
-
-  yield* Effect.tryPromise({
-    try: () => mkdir(LAUNCHD_LOG_DIR, { recursive: true }),
-    catch: (e) =>
-      new ServiceCommandError({
-        message: `Failed to create ${LAUNCHD_LOG_DIR}: ${e instanceof Error ? e.message : String(e)}`,
-      }),
-  })
-
-  yield* writeFile(LAUNCHD_PLIST_PATH, renderLaunchdPlist(binary))
-  yield* Effect.logInfo(`Wrote ${LAUNCHD_PLIST_PATH}`)
-
-  const domain = launchdDomain()
-  yield* runCmd(['launchctl', 'bootout', domain, LAUNCHD_PLIST_PATH], { capture: true })
-  yield* runCmd(['launchctl', 'bootstrap', domain, LAUNCHD_PLIST_PATH], { failOnNonZero: true })
-  yield* Effect.logInfo(`Service installed and started.`)
+  yield* withPlatform((commands) => commands.install(binary))
 })
 
 export const uninstall = Effect.fn('service.uninstall')(function* (opts: { purge: boolean }) {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    yield* runCmd(['systemctl', '--user', 'disable', '--now', `${SERVICE_LABEL}.service`], {
-      capture: true,
-    })
-    yield* removeFile(SYSTEMD_UNIT_PATH)
-    yield* runCmd(['systemctl', '--user', 'daemon-reload'], { capture: true })
-  } else {
-    yield* runCmd(['launchctl', 'bootout', launchdDomain(), LAUNCHD_PLIST_PATH], { capture: true })
-    yield* removeFile(LAUNCHD_PLIST_PATH)
-  }
+  yield* withPlatform((commands) => commands.uninstall)
 
   if (opts.purge) {
     yield* removeFile(ENV_FILE)
@@ -161,86 +239,21 @@ export const uninstall = Effect.fn('service.uninstall')(function* (opts: { purge
 })
 
 export const start = Effect.fn('service.start')(function* () {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    yield* runCmd(['systemctl', '--user', 'start', `${SERVICE_LABEL}.service`], {
-      failOnNonZero: true,
-    })
-  } else {
-    yield* runCmd(['launchctl', 'kickstart', '-k', `${launchdDomain()}/${LAUNCHD_LABEL}`], {
-      failOnNonZero: true,
-    })
-  }
+  yield* withPlatform((commands) => commands.start)
 })
 
 export const stop = Effect.fn('service.stop')(function* () {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    yield* runCmd(['systemctl', '--user', 'stop', `${SERVICE_LABEL}.service`], {
-      failOnNonZero: true,
-    })
-  } else {
-    yield* runCmd(['launchctl', 'kill', 'TERM', `${launchdDomain()}/${LAUNCHD_LABEL}`], {
-      failOnNonZero: true,
-    })
-  }
+  yield* withPlatform((commands) => commands.stop)
 })
 
 export const restart = Effect.fn('service.restart')(function* () {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    yield* runCmd(['systemctl', '--user', 'restart', `${SERVICE_LABEL}.service`], {
-      failOnNonZero: true,
-    })
-  } else {
-    yield* runCmd(['launchctl', 'kickstart', '-k', `${launchdDomain()}/${LAUNCHD_LABEL}`], {
-      failOnNonZero: true,
-    })
-  }
+  yield* withPlatform((commands) => commands.restart)
 })
 
 export const status = Effect.fn('service.status')(function* () {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    yield* runCmd(['systemctl', '--user', 'status', `${SERVICE_LABEL}.service`])
-  } else {
-    yield* runCmd(['launchctl', 'print', `${launchdDomain()}/${LAUNCHD_LABEL}`])
-  }
+  yield* withPlatform((commands) => commands.status)
 })
 
 export const logs = Effect.fn('service.logs')(function* (opts: { follow: boolean; lines: number }) {
-  const platform = yield* detectPlatform()
-
-  if (platform === 'systemd') {
-    const args = [
-      'journalctl',
-      '--user',
-      '-u',
-      `${SERVICE_LABEL}.service`,
-      '-n',
-      String(opts.lines),
-    ]
-
-    if (opts.follow) {
-      args.push('-f')
-    } else {
-      args.push('--no-pager')
-    }
-
-    yield* runCmd(args)
-    return
-  }
-
-  const tailArgs = ['tail']
-
-  if (opts.follow) {
-    tailArgs.push('-F')
-  }
-
-  tailArgs.push('-n', String(opts.lines), LAUNCHD_ERR_LOG, LAUNCHD_OUT_LOG)
-  yield* runCmd(tailArgs)
+  yield* withPlatform((commands) => commands.logs(opts))
 })

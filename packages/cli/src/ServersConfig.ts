@@ -1,6 +1,8 @@
+import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { BearerToken } from '@parley/api/domain'
+import { TOML } from 'bun'
 import { Effect, Option, Schema } from 'effect'
 
 const CONFIG_PATH = join(homedir(), '.config', 'parley', 'servers.toml')
@@ -17,6 +19,33 @@ export const ServersConfigSchema = Schema.Struct({
 })
 export type ServersConfigShape = Schema.Schema.Type<typeof ServersConfigSchema>
 
+export const emptyServersConfig = (): ServersConfigShape => ({ default: undefined, servers: {} })
+
+export const parseServersToml = (text: string) =>
+  Schema.decodeUnknown(ServersConfigSchema)(TOML.parse(text))
+
+export const renderServersToml = (cfg: ServersConfigShape) => {
+  const lines: string[] = []
+
+  if (cfg.default) {
+    lines.push(`default = ${JSON.stringify(cfg.default)}`)
+    lines.push('')
+  }
+
+  for (const [name, entry] of Object.entries(cfg.servers)) {
+    lines.push(`[servers.${name}]`)
+    lines.push(`url = ${JSON.stringify(entry.url)}`)
+
+    if (entry.token) {
+      lines.push(`token = ${JSON.stringify(entry.token)}`)
+    }
+
+    lines.push('')
+  }
+
+  return lines.join('\n')
+}
+
 export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfig', {
   accessors: true,
   effect: Effect.gen(function* () {
@@ -25,36 +54,16 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
       const exists = yield* Effect.promise(() => file.exists())
 
       if (!exists) {
-        return { default: undefined, servers: {} } satisfies ServersConfigShape
+        return emptyServersConfig()
       }
 
-      const parsed = yield* Effect.promise(() =>
-        import(CONFIG_PATH, { with: { type: 'toml' } }).then((m) => m.default as unknown),
-      )
-
-      return yield* Schema.decodeUnknown(ServersConfigSchema)(parsed)
+      const text = yield* Effect.promise(() => file.text())
+      return yield* parseServersToml(text)
     })
 
     const write = Effect.fn('ServersConfig.write')(function* (cfg: ServersConfigShape) {
-      const lines: string[] = []
-
-      if (cfg.default) {
-        lines.push(`default = ${JSON.stringify(cfg.default)}`)
-        lines.push('')
-      }
-
-      for (const [name, entry] of Object.entries(cfg.servers)) {
-        lines.push(`[servers.${name}]`)
-        lines.push(`url = ${JSON.stringify(entry.url)}`)
-
-        if (entry.token) {
-          lines.push(`token = ${JSON.stringify(entry.token)}`)
-        }
-
-        lines.push('')
-      }
-
-      yield* Effect.promise(() => Bun.write(CONFIG_PATH, lines.join('\n')))
+      yield* Effect.promise(() => mkdir(dirname(CONFIG_PATH), { recursive: true }))
+      yield* Effect.promise(() => Bun.write(CONFIG_PATH, renderServersToml(cfg)))
     })
 
     const list = Effect.fn('ServersConfig.list')(function* () {

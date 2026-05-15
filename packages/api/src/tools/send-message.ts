@@ -9,10 +9,12 @@ export const TOOL_NAME = 'send_message' as const
 export const TOOL_DESCRIPTION =
   'Post a message to a Room you are in. Do not engage in social back-and-forth (small talk, "how are you?", sign-offs) unless the human user has explicitly asked you to.'
 
-export const Args = Schema.Struct({
+export const ArgsFields = {
   room: RoomName,
   body: MessageBody,
-})
+} as const
+
+export const Args = Schema.Struct(ArgsFields)
 export type Args = Schema.Schema.Type<typeof Args>
 
 export const Result = Schema.Struct({

@@ -1,40 +1,42 @@
 import { Schema } from 'effect'
 
-import { MessageBody } from '../domain/message'
-import { Nickname } from '../domain/nickname'
 import { RoomName } from '../domain/room'
+import { TOOLS } from '../tools/registry'
 
 export const ToolRequestId = Schema.String.pipe(Schema.brand('@parley/ToolRequestId'))
 export type ToolRequestId = Schema.Schema.Type<typeof ToolRequestId>
 
-export const JoinRoomReq = Schema.TaggedStruct('tool.join_room', {
+const requestFields = {
   requestId: ToolRequestId,
-  room: RoomName,
-  nickname: Schema.optional(Nickname),
+} as const
+
+export const JoinRoomReq = Schema.TaggedStruct(TOOLS.join_room.tag, {
+  ...requestFields,
+  ...TOOLS.join_room.argsFields,
 })
 export type JoinRoomReq = Schema.Schema.Type<typeof JoinRoomReq>
 
-export const LeaveRoomReq = Schema.TaggedStruct('tool.leave_room', {
-  requestId: ToolRequestId,
-  room: RoomName,
+export const LeaveRoomReq = Schema.TaggedStruct(TOOLS.leave_room.tag, {
+  ...requestFields,
+  ...TOOLS.leave_room.argsFields,
 })
 export type LeaveRoomReq = Schema.Schema.Type<typeof LeaveRoomReq>
 
-export const ListRoomsReq = Schema.TaggedStruct('tool.list_rooms', {
-  requestId: ToolRequestId,
+export const ListRoomsReq = Schema.TaggedStruct(TOOLS.list_rooms.tag, {
+  ...requestFields,
+  ...TOOLS.list_rooms.argsFields,
 })
 export type ListRoomsReq = Schema.Schema.Type<typeof ListRoomsReq>
 
-export const SendMessageReq = Schema.TaggedStruct('tool.send_message', {
-  requestId: ToolRequestId,
-  room: RoomName,
-  body: MessageBody,
+export const SendMessageReq = Schema.TaggedStruct(TOOLS.send_message.tag, {
+  ...requestFields,
+  ...TOOLS.send_message.argsFields,
 })
 export type SendMessageReq = Schema.Schema.Type<typeof SendMessageReq>
 
-export const WhoIsHereReq = Schema.TaggedStruct('tool.who_is_here', {
-  requestId: ToolRequestId,
-  room: RoomName,
+export const WhoIsHereReq = Schema.TaggedStruct(TOOLS.who_is_here.tag, {
+  ...requestFields,
+  ...TOOLS.who_is_here.argsFields,
 })
 export type WhoIsHereReq = Schema.Schema.Type<typeof WhoIsHereReq>
 

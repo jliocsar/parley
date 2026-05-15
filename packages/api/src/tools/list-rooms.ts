@@ -8,7 +8,9 @@ export const TOOL_NAME = 'list_rooms' as const
 export const TOOL_DESCRIPTION =
   'List Rooms. Returns Rooms the current Session is in (with the Nickname used in each) and Rooms available to join.'
 
-export const Args = Schema.Struct({})
+export const ArgsFields = {} as const
+
+export const Args = Schema.Struct(ArgsFields)
 export type Args = Schema.Schema.Type<typeof Args>
 
 export const JoinedRoom = Schema.Struct({

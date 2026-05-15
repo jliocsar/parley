@@ -6,9 +6,11 @@ export const TOOL_NAME = 'leave_room' as const
 
 export const TOOL_DESCRIPTION = 'Leave a Parley Room. Silent — no other member is notified.'
 
-export const Args = Schema.Struct({
+export const ArgsFields = {
   room: RoomName,
-})
+} as const
+
+export const Args = Schema.Struct(ArgsFields)
 export type Args = Schema.Schema.Type<typeof Args>
 
 export const Result = Schema.Struct({

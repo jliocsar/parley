@@ -1,32 +1,17 @@
 import type { ServerWebSocket } from 'bun'
-import { DateTime, Effect, Fiber, Option, Runtime, Schema } from 'effect'
+import { Effect, Fiber, Option, Runtime, Schema } from 'effect'
 
 import { ServerConfig } from '../config'
 import type { AuthLabel, BearerToken } from '../domain/ids'
 import { SessionId } from '../domain/ids'
-import { MESSAGE_BODY_MAX_BYTES } from '../domain/message'
-import type { Nickname } from '../domain/nickname'
-import type { RoomName } from '../domain/room'
 import { AuthRequiredError, TokenRevokedError } from '../errors/auth'
 import { CryptoService } from '../services/Crypto'
 import { FanoutService } from '../services/FanoutService'
 import { MembershipRegistry } from '../services/MembershipRegistry'
-import { generateNickname, nicknameWithSuffix } from '../services/NicknameGenerator'
 import { RateLimiter } from '../services/RateLimiter'
-import { RoomRepo } from '../services/RoomRepo'
 import { SessionRegistry } from '../services/SessionRegistry'
 import { TokenService } from '../services/TokenService'
-import * as Tools from '../tools'
-import {
-  type AckFrame,
-  ClientFrame,
-  type JoinRoomReq,
-  type LeaveRoomReq,
-  type ListRoomsReq,
-  type SendMessageReq,
-  type ToolRequestId,
-  type WhoIsHereReq,
-} from '../wire/client'
+import { ClientFrame, type ToolRequestId } from '../wire/client'
 import { HelloErrFrame, type HelloErrorCode, HelloFrame, HelloOkFrame } from '../wire/hello'
 import {
   type RoomMessageEvent,
@@ -35,9 +20,9 @@ import {
   type ToolErrRes,
   type ToolOkRes,
 } from '../wire/server'
+import { ToolRuntime } from './ToolRuntime'
 
 const SERVER_VERSION = '0.1.0'
-const MAX_NICKNAME_ATTEMPTS = 8
 const SESSION_EXPIRY_MS = 60_000
 
 type WsData = {
@@ -50,32 +35,27 @@ const encodeHelloErr = Schema.encodeSync(HelloErrFrame)
 const encodeServerFrame = Schema.encodeSync(ServerFrame)
 const decodeHello = Schema.decodeUnknown(HelloFrame)
 const decodeClient = Schema.decodeUnknown(ClientFrame)
-const encodeJoinResult = Schema.encodeSync(Tools.JoinRoom.Result)
-const encodeLeaveResult = Schema.encodeSync(Tools.LeaveRoom.Result)
-const encodeListResult = Schema.encodeSync(Tools.ListRooms.Result)
-const encodeSendResult = Schema.encodeSync(Tools.SendMessage.Result)
-const encodeWhoResult = Schema.encodeSync(Tools.WhoIsHere.Result)
 
 export class WsServer extends Effect.Service<WsServer>()('WsServer', {
   accessors: true,
   dependencies: [
-    RoomRepo.Default,
     TokenService.Default,
     SessionRegistry.Default,
     MembershipRegistry.Default,
     FanoutService.Default,
     RateLimiter.Default,
     CryptoService.Default,
+    ToolRuntime.Default,
   ],
   scoped: Effect.gen(function* () {
     const config = yield* ServerConfig
-    const rooms = yield* RoomRepo
     const tokens = yield* TokenService
     const sessions = yield* SessionRegistry
     const memberships = yield* MembershipRegistry
     const fanout = yield* FanoutService
     const rateLimiter = yield* RateLimiter
     const cryptoSvc = yield* CryptoService
+    const tools = yield* ToolRuntime
 
     const runtime = yield* Effect.runtime<never>()
     const fork = <A, E>(eff: Effect.Effect<A, E, never>) => Runtime.runFork(runtime)(eff)
@@ -121,9 +101,6 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       ws: ServerWebSocket<WsData>,
       frame: ToolOkRes | ToolErrRes | SystemErrorEvent | RoomMessageEvent,
     ) => sendEncoded(ws, encodeServerFrame, frame, 'server frame')
-
-    const sendToolOk = (ws: ServerWebSocket<WsData>, requestId: ToolRequestId, result: unknown) =>
-      sendServerFrame(ws, { _tag: 'tool.ok', requestId, result })
 
     const sendToolErr = (
       ws: ServerWebSocket<WsData>,
@@ -257,192 +234,14 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         yield* handleFreshHello(ws, hello)
       })
 
-    const allocateNickname = (req: JoinRoomReq, sessionId: SessionId) =>
-      Effect.gen(function* () {
-        const base = generateNickname()
-
-        for (let attempt = 1; attempt <= MAX_NICKNAME_ATTEMPTS; attempt++) {
-          const candidate: Nickname = attempt === 1 ? base : nicknameWithSuffix(base, attempt)
-          const result = yield* memberships.join(req.room, sessionId, candidate)
-
-          if (result.ok) {
-            return Option.some(candidate)
-          }
-        }
-
-        return Option.none<Nickname>()
-      })
-
-    const handleJoinRoom = (ws: ServerWebSocket<WsData>, req: JoinRoomReq) =>
-      Effect.gen(function* () {
-        yield* rooms.ensure(req.room)
-        const sessionId = ws.data.sessionId
-
-        if (req.nickname !== undefined) {
-          const result = yield* memberships.join(req.room, sessionId, req.nickname)
-
-          if (result.ok) {
-            const membersCount = yield* memberships.memberCount(req.room)
-            yield* sendToolOk(
-              ws,
-              req.requestId,
-              encodeJoinResult({ room: req.room, nickname: req.nickname, membersCount }),
-            )
-          } else {
-            yield* sendToolErr(
-              ws,
-              req.requestId,
-              'NicknameTakenError',
-              `Nickname ${req.nickname} is taken in ${req.room}`,
-            )
-          }
-
-          return
-        }
-
-        const allocated = yield* allocateNickname(req, sessionId)
-
-        if (Option.isSome(allocated)) {
-          const membersCount = yield* memberships.memberCount(req.room)
-          yield* sendToolOk(
-            ws,
-            req.requestId,
-            encodeJoinResult({
-              room: req.room,
-              nickname: allocated.value,
-              membersCount,
-            }),
-          )
-          return
-        }
-
-        yield* sendToolErr(
-          ws,
-          req.requestId,
-          'NicknameTakenError',
-          `Could not allocate a unique nickname in ${req.room}`,
+    const dispatch = (ws: ServerWebSocket<WsData>, frame: ClientFrame) =>
+      tools
+        .run(ws.data.sessionId, frame)
+        .pipe(
+          Effect.flatMap((response) =>
+            response === undefined ? Effect.void : sendServerFrame(ws, response),
+          ),
         )
-      })
-
-    const handleLeaveRoom = (ws: ServerWebSocket<WsData>, req: LeaveRoomReq) =>
-      Effect.gen(function* () {
-        yield* memberships.leave(req.room, ws.data.sessionId)
-        yield* sendToolOk(ws, req.requestId, encodeLeaveResult({ room: req.room }))
-      })
-
-    const handleListRooms = (ws: ServerWebSocket<WsData>, req: ListRoomsReq) =>
-      Effect.gen(function* () {
-        const all = yield* rooms.listAll()
-        const sessionId = ws.data.sessionId
-
-        const joined: { name: RoomName; nickname: Nickname; membersCount: number }[] = []
-        const available: { name: RoomName; membersCount: number }[] = []
-
-        for (const r of all) {
-          const { membersCount, mine } = yield* memberships.summarise(r.name, sessionId)
-
-          if (Option.isSome(mine)) {
-            joined.push({ name: r.name, nickname: mine.value, membersCount })
-          } else {
-            available.push({ name: r.name, membersCount })
-          }
-        }
-
-        yield* sendToolOk(ws, req.requestId, encodeListResult({ joined, available }))
-      })
-
-    const handleSendMessage = (ws: ServerWebSocket<WsData>, req: SendMessageReq) =>
-      Effect.gen(function* () {
-        const sessionId = ws.data.sessionId
-        const limit = yield* rateLimiter.tryConsume(sessionId)
-
-        if (!limit.ok) {
-          yield* sendToolErr(
-            ws,
-            req.requestId,
-            'RateLimitedError',
-            `Rate limited; retry after ${limit.retryAfterMs}ms`,
-            { retryAfterMs: limit.retryAfterMs },
-          )
-          return
-        }
-
-        const bytes = new TextEncoder().encode(req.body).byteLength
-
-        if (bytes > MESSAGE_BODY_MAX_BYTES) {
-          yield* sendToolErr(
-            ws,
-            req.requestId,
-            'MessageTooLargeError',
-            `Message too large: ${bytes} bytes (max ${MESSAGE_BODY_MAX_BYTES})`,
-          )
-          return
-        }
-
-        const members = yield* memberships.membersOf(req.room)
-        const me = members.find((m) => m.sessionId === sessionId)
-
-        if (!me) {
-          yield* sendToolErr(ws, req.requestId, 'NotInRoomError', `Not joined to room ${req.room}`)
-          return
-        }
-
-        const seq = yield* fanout.nextSeqFor(req.room)
-        const messageId = yield* cryptoSvc.issueMessageId()
-        const sentAt = DateTime.unsafeNow()
-
-        const event: RoomMessageEvent = {
-          _tag: 'room.message',
-          room: req.room,
-          seq,
-          messageId,
-          fromNickname: me.nickname,
-          body: req.body,
-          sentAt,
-        }
-
-        yield* fanout.enqueueAndPush(req.room, event, sessionId)
-        yield* sendToolOk(
-          ws,
-          req.requestId,
-          encodeSendResult({ room: req.room, seq, messageId, sentAt }),
-        )
-      })
-
-    const handleWhoIsHere = (ws: ServerWebSocket<WsData>, req: WhoIsHereReq) =>
-      Effect.gen(function* () {
-        const members = yield* memberships.membersOf(req.room)
-        yield* sendToolOk(
-          ws,
-          req.requestId,
-          encodeWhoResult({ room: req.room, nicknames: members.map((m) => m.nickname) }),
-        )
-      })
-
-    const handleAck = (ws: ServerWebSocket<WsData>, frame: AckFrame) =>
-      fanout.ackUpTo(ws.data.sessionId, frame.room, frame.seq)
-
-    const dispatch = (ws: ServerWebSocket<WsData>, frame: ClientFrame) => {
-      switch (frame._tag) {
-        case 'tool.join_room':
-          return handleJoinRoom(ws, frame)
-
-        case 'tool.leave_room':
-          return handleLeaveRoom(ws, frame)
-
-        case 'tool.list_rooms':
-          return handleListRooms(ws, frame)
-
-        case 'tool.send_message':
-          return handleSendMessage(ws, frame)
-
-        case 'tool.who_is_here':
-          return handleWhoIsHere(ws, frame)
-
-        case 'ack':
-          return handleAck(ws, frame)
-      }
-    }
 
     const handleMessage = (ws: ServerWebSocket<WsData>, text: string) =>
       Effect.gen(function* () {

@@ -18,7 +18,9 @@ Apply Drizzle migrations by delegating to Drizzle's own `dialect.migrate(meta, s
 
 <anti-pattern>
 
-Anything that touches `__drizzle_migrations` directly from application code — `CREATE TABLE ... __drizzle_migrations`, `INSERT INTO __drizzle_migrations`, splitting on `--> statement-breakpoint` ourselves, hashing or ordering our own way. If you find yourself doing that, you're rebuilding the migrator. Stop and call `dialect.migrate` instead.
+Anything that manages `__drizzle_migrations` directly from application code — `CREATE TABLE ... __drizzle_migrations`, `INSERT INTO __drizzle_migrations`, splitting on `--> statement-breakpoint` ourselves, hashing or ordering our own way. If you find yourself doing that, you're rebuilding the migrator. Stop and call `dialect.migrate` instead.
+
+Read-only inspection is allowed for reporting after `dialect.migrate` owns the actual migration work. Example: `runEmbeddedMigrations` counts rows before/after migration to report how many migrations were applied, but it never creates or writes Drizzle's migration table.
 
 </anti-pattern>
 

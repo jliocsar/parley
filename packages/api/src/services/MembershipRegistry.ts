@@ -1,4 +1,4 @@
-import { Effect, MutableHashMap, Option } from 'effect'
+import { Effect, Option } from 'effect'
 
 import type { SessionId } from '../domain/ids'
 import type { Nickname } from '../domain/nickname'
@@ -9,15 +9,7 @@ export type RoomMember = {
   readonly nickname: Nickname
 }
 
-type RoomState = {
-  readonly bySession: Map<SessionId, Nickname>
-  readonly byNickname: Map<Nickname, SessionId>
-}
-
-const emptyRoomState = (): RoomState => ({
-  bySession: new Map(),
-  byNickname: new Map(),
-})
+type RoomState = Map<SessionId, Nickname>
 
 export type JoinResult =
   | { readonly ok: true }
@@ -26,69 +18,41 @@ export type JoinResult =
 export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('MembershipRegistry', {
   accessors: true,
   effect: Effect.gen(function* () {
-    const rooms = MutableHashMap.empty<RoomName, RoomState>()
-    const sessionRooms = MutableHashMap.empty<SessionId, Set<RoomName>>()
+    const rooms = new Map<RoomName, RoomState>()
 
     const getOrInitRoom = (room: RoomName): RoomState => {
-      const existing = MutableHashMap.get(rooms, room)
+      const existing = rooms.get(room)
 
-      if (Option.isSome(existing)) {
-        return existing.value
+      if (existing !== undefined) {
+        return existing
       }
 
-      const fresh = emptyRoomState()
-      MutableHashMap.set(rooms, room, fresh)
+      const fresh = new Map<SessionId, Nickname>()
+      rooms.set(room, fresh)
       return fresh
     }
 
-    const addSessionRoom = (sessionId: SessionId, room: RoomName) => {
-      const existing = MutableHashMap.get(sessionRooms, sessionId)
-
-      if (Option.isSome(existing)) {
-        existing.value.add(room)
-        return
-      }
-
-      MutableHashMap.set(sessionRooms, sessionId, new Set([room]))
-    }
-
     const leaveSync = (room: RoomName, sessionId: SessionId) => {
-      const state = MutableHashMap.get(rooms, room)
+      const state = rooms.get(room)
 
-      if (Option.isSome(state)) {
-        const nick = state.value.bySession.get(sessionId)
-
-        if (nick !== undefined) {
-          state.value.bySession.delete(sessionId)
-          state.value.byNickname.delete(nick)
-        }
-      }
-
-      const set = MutableHashMap.get(sessionRooms, sessionId)
-
-      if (Option.isSome(set)) {
-        set.value.delete(room)
+      if (state !== undefined) {
+        state.delete(sessionId)
       }
     }
 
     const join = (room: RoomName, sessionId: SessionId, nickname: Nickname) =>
       Effect.sync((): JoinResult => {
         const state = getOrInitRoom(room)
-        const owner = state.byNickname.get(nickname)
+        const owner = Array.from(state).find(
+          ([candidateSessionId, candidateNickname]) =>
+            candidateNickname === nickname && candidateSessionId !== sessionId,
+        )?.[0]
 
-        if (owner !== undefined && owner !== sessionId) {
+        if (owner !== undefined) {
           return { ok: false, collidedWith: owner }
         }
 
-        const previous = state.bySession.get(sessionId)
-
-        if (previous !== undefined && previous !== nickname) {
-          state.byNickname.delete(previous)
-        }
-
-        state.bySession.set(sessionId, nickname)
-        state.byNickname.set(nickname, sessionId)
-        addSessionRoom(sessionId, room)
+        state.set(sessionId, nickname)
         return { ok: true }
       }).pipe(Effect.withSpan('MembershipRegistry.join'))
 
@@ -99,27 +63,21 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
 
     const dropSession = (sessionId: SessionId) =>
       Effect.sync(() => {
-        const set = MutableHashMap.get(sessionRooms, sessionId)
-
-        if (Option.isSome(set)) {
-          for (const room of set.value) {
-            leaveSync(room, sessionId)
-          }
+        for (const state of rooms.values()) {
+          state.delete(sessionId)
         }
-
-        MutableHashMap.remove(sessionRooms, sessionId)
       }).pipe(Effect.withSpan('MembershipRegistry.dropSession'))
 
     const membersOf = (room: RoomName) =>
       Effect.sync(() => {
-        const state = MutableHashMap.get(rooms, room)
+        const state = rooms.get(room)
 
-        if (Option.isNone(state)) {
+        if (state === undefined) {
           return [] as RoomMember[]
         }
 
         return Array.from(
-          state.value.bySession,
+          state,
           ([sessionId, nickname]): RoomMember => ({
             sessionId,
             nickname,
@@ -129,28 +87,35 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
 
     const roomsOfSession = (sessionId: SessionId) =>
       Effect.sync(() => {
-        const set = MutableHashMap.get(sessionRooms, sessionId)
-        return Option.isSome(set) ? new Set(set.value) : new Set<RoomName>()
+        const joined = new Set<RoomName>()
+
+        for (const [room, state] of rooms) {
+          if (state.has(sessionId)) {
+            joined.add(room)
+          }
+        }
+
+        return joined
       }).pipe(Effect.withSpan('MembershipRegistry.roomsOfSession'))
 
     const memberCount = (room: RoomName) =>
       Effect.sync(() => {
-        const state = MutableHashMap.get(rooms, room)
-        return Option.isSome(state) ? state.value.bySession.size : 0
+        const state = rooms.get(room)
+        return state?.size ?? 0
       }).pipe(Effect.withSpan('MembershipRegistry.memberCount'))
 
     const summarise = (room: RoomName, sessionId: SessionId) =>
       Effect.sync(() => {
-        const state = MutableHashMap.get(rooms, room)
+        const state = rooms.get(room)
 
-        if (Option.isNone(state)) {
+        if (state === undefined) {
           return { membersCount: 0, mine: Option.none<Nickname>() }
         }
 
-        const mine = state.value.bySession.get(sessionId)
+        const mine = state.get(sessionId)
 
         return {
-          membersCount: state.value.bySession.size,
+          membersCount: state.size,
           mine: mine !== undefined ? Option.some(mine) : Option.none<Nickname>(),
         }
       }).pipe(Effect.withSpan('MembershipRegistry.summarise'))

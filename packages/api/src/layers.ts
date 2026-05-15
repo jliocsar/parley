@@ -1,5 +1,6 @@
 import { Layer } from 'effect'
 import { TelemetryLive } from './server/Telemetry'
+import { ToolRuntime } from './server/ToolRuntime'
 import { WsServer } from './server/WsServer'
 import { CryptoService } from './services/Crypto'
 import { Db } from './services/Db'
@@ -21,6 +22,7 @@ export const DomainLive = Layer.mergeAll(
   MembershipRegistry.Default,
   FanoutService.Default,
   RateLimiter.Default,
+  ToolRuntime.Default,
 )
 
 export const ServerLive = WsServer.Default.pipe(

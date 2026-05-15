@@ -51,7 +51,7 @@ export class McpServer extends Effect.Service<McpServer>()('McpServer', {
     yield* Effect.forkScoped(
       Stream.runForEach(client.incoming, (event) =>
         event._tag === 'room.message'
-          ? channels.deliverMessage(event)
+          ? channels.deliverMessage(event).pipe(Effect.zipRight(client.ack(event.room, event.seq)))
           : channels.deliverSystemError(event),
       ),
     )
