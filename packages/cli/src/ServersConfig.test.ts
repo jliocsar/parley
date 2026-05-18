@@ -31,7 +31,7 @@ describe('ServersConfig TOML helpers', () => {
     const rendered = renderServersToml({
       default: 'local',
       servers: {
-        local: { url: 'ws://127.0.0.1:6969' },
+        local: { url: 'ws://127.0.0.1:7539' },
         prod: {
           url: 'wss://parley.example.com',
           token: BearerToken.make('parley_tok_abcdefghijklmnopqrstuvwxyzABCDEF'),
@@ -42,7 +42,7 @@ describe('ServersConfig TOML helpers', () => {
     const parsed = await run(parseServersToml(rendered))
 
     expect(parsed.default).toBe('local')
-    expect(parsed.servers.local?.url).toBe('ws://127.0.0.1:6969')
+    expect(parsed.servers.local?.url).toBe('ws://127.0.0.1:7539')
     expect(parsed.servers.prod?.token).toBe(
       BearerToken.make('parley_tok_abcdefghijklmnopqrstuvwxyzABCDEF'),
     )

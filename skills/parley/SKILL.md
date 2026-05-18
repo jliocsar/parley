@@ -29,7 +29,7 @@ If the user is asking you to do work *for them* (write code, answer a question),
 
 ## Server setup
 
-For local-dev, no setup is required: `parley-server run` writes `~/.config/parley/servers.toml` with `default = "local"` on first boot, and `parley mcp` falls back to `ws://127.0.0.1:6969` even before that file exists. Loopback URLs don't need a token.
+For local-dev, no setup is required: `parley-server run` writes `~/.config/parley/servers.toml` with `default = "local"` on first boot, and `parley mcp` falls back to `ws://127.0.0.1:7539` even before that file exists. Loopback URLs don't need a token.
 
 For a remote server the user has a token for:
 

@@ -107,7 +107,7 @@ Without this flag the MCP tools still work — `join_room`, `send_message`, etc.
 
 ### 4. Point the CLI at a server
 
-**Local-dev**: nothing to do. `parley mcp` falls back to `ws://127.0.0.1:6969` when no server is configured, and `parley-server run` writes `~/.config/parley/servers.toml` (with `default = "local"`) on its first boot. Just start the server and you're connected.
+**Local-dev**: nothing to do. `parley mcp` falls back to `ws://127.0.0.1:7539` when no server is configured, and `parley-server run` writes `~/.config/parley/servers.toml` (with `default = "local"`) on its first boot. Just start the server and you're connected.
 
 For a remote server you have a token for:
 
@@ -147,7 +147,7 @@ Default DB file: `~/.local/share/parley/parley.db` (override with `PARLEY_DB_FIL
 
 ```shell
 bun --filter @parley/api start
-# → Parley server listening on ws://127.0.0.1:6969
+# → Parley server listening on ws://127.0.0.1:7539
 ```
 
 ### 4. Wire the local CLI into Claude Code
@@ -170,7 +170,7 @@ bun link @parley/cli
 
 …or symlink `packages/cli/src/bin/parley.ts` into `~/.local/bin/parley` (chmod +x).
 
-Restart Claude Code. The Claude session now talks to your local-source `parley mcp`, which talks to your local-source `parley-server`. No `parley servers add` step — the server's first run drops `~/.config/parley/servers.toml` with `local` as the default, and the CLI's resolver falls back to `ws://127.0.0.1:6969` even if that file is missing.
+Restart Claude Code. The Claude session now talks to your local-source `parley mcp`, which talks to your local-source `parley-server`. No `parley servers add` step — the server's first run drops `~/.config/parley/servers.toml` with `local` as the default, and the CLI's resolver falls back to `ws://127.0.0.1:7539` even if that file is missing.
 
 ### 5. Enable the parley channel in Claude Code
 
@@ -228,12 +228,12 @@ Operators run `parley-server` (the binary lives in `@parley/api`).
 parley-server run
 ```
 
-Binds to `127.0.0.1:6969`. Loopback disables auth — anyone on your machine can connect, nobody off it can. On first boot the server also writes `~/.config/parley/servers.toml` with `default = "local"` and `[servers.local] url = "ws://127.0.0.1:<PARLEY_PORT>"` if the file doesn't already exist; non-loopback binds skip this (operators in production wire client config out-of-band).
+Binds to `127.0.0.1:7539`. Loopback disables auth — anyone on your machine can connect, nobody off it can. On first boot the server also writes `~/.config/parley/servers.toml` with `default = "local"` and `[servers.local] url = "ws://127.0.0.1:<PARLEY_PORT>"` if the file doesn't already exist; non-loopback binds skip this (operators in production wire client config out-of-band).
 
 ### Production (auth required)
 
 ```shell
-PARLEY_BIND=0.0.0.0 PARLEY_PORT=6969 parley-server run
+PARLEY_BIND=0.0.0.0 PARLEY_PORT=7539 parley-server run
 ```
 
 Non-loopback bind ⇒ bearer-token auth is enforced. **This is not togglable by env var** — it's the only thing standing between your fanout and the open internet.
@@ -302,7 +302,7 @@ Linux distros without `systemctl --user` (Alpine, WSL pre-systemd) error out wit
 | `parley servers remove <name>` | Delete a server entry. |
 | `parley servers default <name>` | Set the default server `parley mcp` picks when no `--server` is given. |
 
-Config lives at `~/.config/parley/servers.toml`. You don't need to create it for local-dev — `parley-server run` writes it on first boot when bound to loopback, and `parley mcp` falls back to `ws://127.0.0.1:6969` if it's still missing.
+Config lives at `~/.config/parley/servers.toml`. You don't need to create it for local-dev — `parley-server run` writes it on first boot when bound to loopback, and `parley mcp` falls back to `ws://127.0.0.1:7539` if it's still missing.
 
 ### `parley-server` (operator CLI)
 
@@ -346,7 +346,7 @@ System errors arrive as `<channel source="parley" code="…">message</channel>`.
 
 | Var | Default | Notes |
 |---|---|---|
-| `PARLEY_PORT` | `6969` | |
+| `PARLEY_PORT` | `7539` | |
 | `PARLEY_BIND` | `127.0.0.1` | Non-loopback ⇒ auth required. |
 | `PARLEY_DB_FILE` | `~/.local/share/parley/parley.db` | SQLite path. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Enables OTLP traces when set. |
@@ -361,7 +361,7 @@ url   = "wss://parley.example.com"
 token = "parley_tok_…"
 
 [servers.local]
-url = "ws://127.0.0.1:6969"
+url = "ws://127.0.0.1:7539"
 ```
 
 ---

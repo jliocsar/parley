@@ -22,13 +22,13 @@ const run = <A, E>(eff: Effect.Effect<A, E, never>) => Effect.runPromise(eff)
 
 describe('ensureLocalServerEntry', () => {
   it('writes servers.toml with the local entry on first boot when bound to loopback', async () => {
-    const result = await run(ensureLocalServerEntry({ bind: '127.0.0.1', port: 6969, path }))
+    const result = await run(ensureLocalServerEntry({ bind: '127.0.0.1', port: 7539, path }))
 
     expect(result.written).toBe(true)
     const written = await Bun.file(path).text()
     expect(written).toContain('default = "local"')
     expect(written).toContain('[servers.local]')
-    expect(written).toContain('url = "ws://127.0.0.1:6969"')
+    expect(written).toContain('url = "ws://127.0.0.1:7539"')
   })
 
   it('uses the configured port in the local URL', async () => {
@@ -41,7 +41,7 @@ describe('ensureLocalServerEntry', () => {
     const original = 'default = "prod"\n\n[servers.prod]\nurl = "wss://example.com"\n'
     await Bun.write(path, original)
 
-    const result = await run(ensureLocalServerEntry({ bind: '127.0.0.1', port: 6969, path }))
+    const result = await run(ensureLocalServerEntry({ bind: '127.0.0.1', port: 7539, path }))
 
     expect(result.written).toBe(false)
 
@@ -54,7 +54,7 @@ describe('ensureLocalServerEntry', () => {
   })
 
   it('skips write entirely on non-loopback binds', async () => {
-    const result = await run(ensureLocalServerEntry({ bind: '0.0.0.0', port: 6969, path }))
+    const result = await run(ensureLocalServerEntry({ bind: '0.0.0.0', port: 7539, path }))
 
     expect(result.written).toBe(false)
 
@@ -66,21 +66,21 @@ describe('ensureLocalServerEntry', () => {
   })
 
   it('treats ::1 and localhost as loopback', async () => {
-    await run(ensureLocalServerEntry({ bind: '::1', port: 6969, path }))
+    await run(ensureLocalServerEntry({ bind: '::1', port: 7539, path }))
     expect(await Bun.file(path).exists()).toBe(true)
 
     rmSync(path)
 
-    await run(ensureLocalServerEntry({ bind: 'localhost', port: 6969, path }))
+    await run(ensureLocalServerEntry({ bind: 'localhost', port: 7539, path }))
     expect(await Bun.file(path).exists()).toBe(true)
   })
 })
 
 describe('renderLocalServersToml', () => {
   it('produces a parseable TOML snippet with default and server entry', () => {
-    const toml = renderLocalServersToml('ws://127.0.0.1:6969')
+    const toml = renderLocalServersToml('ws://127.0.0.1:7539')
     expect(toml).toBe(
-      ['default = "local"', '', '[servers.local]', 'url = "ws://127.0.0.1:6969"', ''].join('\n'),
+      ['default = "local"', '', '[servers.local]', 'url = "ws://127.0.0.1:7539"', ''].join('\n'),
     )
   })
 })

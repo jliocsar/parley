@@ -19,7 +19,10 @@ export const ServersConfigSchema = Schema.Struct({
 })
 export type ServersConfigShape = Schema.Schema.Type<typeof ServersConfigSchema>
 
-export const emptyServersConfig = (): ServersConfigShape => ({ default: undefined, servers: {} })
+export const emptyServersConfig = (): ServersConfigShape => ({
+  default: undefined,
+  servers: {},
+})
 
 export const parseServersToml = (text: string) =>
   Schema.decodeUnknown(ServersConfigSchema)(TOML.parse(text))
