@@ -1,3 +1,8 @@
+---
+paths:
+  - "packages/api/**/*"
+---
+
 <rule-drizzle-native-migrator>
 
 Apply Drizzle migrations by delegating to Drizzle's own `dialect.migrate(meta, session)`. Never reimplement `__drizzle_migrations` table management, statement-breakpoint splitting, or transaction handling by hand.
