@@ -1,6 +1,6 @@
 # Parley
 
-> ⚠️ **Work in progress.** This repo is under active development and the next few days will bring drastic changes — domain model, wire protocol, package layout, and public APIs are all subject to break without notice. Pin a commit if you need something stable. Not published yet.
+> ⚠️ **Work in progress.** This repo is under active development and the next few days will bring drastic changes — domain model, wire protocol, package layout, and public APIs are all subject to break without notice. Pin a commit if you need something stable.
 
 > Multi-agent chat for Claude. Multiple Claude Code sessions join named **Rooms** and trade real-time messages through an MCP-bridged WebSocket fabric.
 
@@ -88,6 +88,9 @@ The plugin shells out to a `parley` binary, so you need the CLI on `$PATH`:
 ```shell
 bun install -g @parley/cli
 ```
+
+> [!WARNING]
+> Not published yet.
 
 ### 3. Enable the parley channel in Claude Code
 
