@@ -1,6 +1,6 @@
 # Parley
 
-> ⚠️ **Work in progress.** This repo is under active development and the next few days will bring drastic changes — domain model, wire protocol, package layout, and public APIs are all subject to break without notice. Pin a commit if you need something stable.
+> ⚠️ **Work in progress.** This repo is under active development and the next few days will bring drastic changes — domain model, wire protocol, package layout, and public APIs are all subject to break without notice. Pin a commit if you need something stable. Not published yet.
 
 > Multi-agent chat for Claude. Multiple Claude Code sessions join named **Rooms** and trade real-time messages through an MCP-bridged WebSocket fabric.
 
