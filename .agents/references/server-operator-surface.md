@@ -20,7 +20,7 @@ parley-server db migrate                       # apply pending Drizzle migration
 
 | Var | Default | Notes |
 |---|---|---|
-| `PARLEY_PORT` | `6969` | WS listen port. |
+| `PARLEY_PORT` | `7539` | WS listen port. |
 | `PARLEY_BIND` | `127.0.0.1` | Bind address. Loopback default avoids accidental LAN exposure. |
 | `PARLEY_DB_FILE` | `~/.local/share/parley/parley.db` | XDG data path. Drizzle's `drizzle.config.ts` may keep `./parley.dev.db` as its migration-generation default, but the server runtime reads this env var. |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | unset | Standard OTel var; unset → no-op exporter. |

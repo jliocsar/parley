@@ -77,7 +77,7 @@ Pattern: every service uses `Effect.Service<Self>()(tag, { accessors: true, depe
 
 | Service | Kind | Depends on | Purpose |
 |---|---|---|---|
-| `ServersConfig` | service | — | Reads/writes `~/.config/parley/servers.toml` via `Bun.TOML.parse` + Schema decoding; resolves a name (or default) to `{ url, token }`. Resolver falls back to `ws://127.0.0.1:6969` when no entry is configured for `local`, so first-time clients work even before the file exists. |
+| `ServersConfig` | service | — | Reads/writes `~/.config/parley/servers.toml` via `Bun.TOML.parse` + Schema decoding; resolves a name (or default) to `{ url, token }`. Resolver falls back to `ws://127.0.0.1:7539` when no entry is configured for `local`, so first-time clients work even before the file exists. |
 
 The matching server-side bootstrap lives in `@parley/api/services/ConfigBootstrap.ts` — `ensureLocalServerEntry({ bind, port })` is called at the start of `parley-server run` and writes the same `servers.toml` (with `default = "local"`) on first boot when bound to loopback. Idempotent: never overwrites an existing file, never writes when bind is non-loopback.
 
