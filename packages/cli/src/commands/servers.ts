@@ -1,7 +1,9 @@
-import { Args, Command, Options } from '@effect/cli'
+import * as Args from '@effect/cli/Args'
+import * as Command from '@effect/cli/Command'
+import * as Options from '@effect/cli/Options'
 import { BearerToken } from '@parley/api/domain'
-import { Effect, Option } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
 import { ServersConfig } from '../ServersConfig'
 
 const nameArg = Args.text({ name: 'name' })
@@ -14,7 +16,7 @@ const tokenOption = Options.text('token').pipe(
 )
 
 const list = Command.make('list', {}, () =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const cfg = yield* ServersConfig
     const data = yield* cfg.list()
     yield* Effect.logInfo(`default: ${data.default ?? '(none)'}`)
@@ -22,36 +24,33 @@ const list = Command.make('list', {}, () =>
     for (const [name, entry] of Object.entries(data.servers)) {
       yield* Effect.logInfo(`  ${name}\t${entry.url}\ttoken=${entry.token ? 'yes' : 'no'}`)
     }
-  }).pipe(Effect.provide(ServersConfig.Default)),
-)
+  }).pipe(Effect.provide(ServersConfig.Default)))
 
 const add = Command.make(
   'add',
   { name: nameArg, url: urlArg, token: tokenOption },
   ({ name, url, token }) =>
-    Effect.gen(function* () {
+    Effect.gen(function*() {
       const cfg = yield* ServersConfig
-      const tokenOpt = (token as Option.Option<string>).pipe(Option.map((t) => BearerToken.make(t)))
+      const tokenOpt = token.pipe(Option.map((t) => BearerToken.make(t)))
       yield* cfg.add(name, url, tokenOpt)
       yield* Effect.logInfo(`Added server "${name}".`)
     }).pipe(Effect.provide(ServersConfig.Default)),
 )
 
 const remove = Command.make('remove', { name: nameArg }, ({ name }) =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const cfg = yield* ServersConfig
     yield* cfg.remove(name)
     yield* Effect.logInfo(`Removed server "${name}".`)
-  }).pipe(Effect.provide(ServersConfig.Default)),
-)
+  }).pipe(Effect.provide(ServersConfig.Default)))
 
 const setDefault = Command.make('default', { name: nameArg }, ({ name }) =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const cfg = yield* ServersConfig
     yield* cfg.setDefault(name)
     yield* Effect.logInfo(`Default server is now "${name}".`)
-  }).pipe(Effect.provide(ServersConfig.Default)),
-)
+  }).pipe(Effect.provide(ServersConfig.Default)))
 
 export const servers = Command.make('servers').pipe(
   Command.withSubcommands([list, add, remove, setDefault]),

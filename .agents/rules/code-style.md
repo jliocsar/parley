@@ -1,26 +1,29 @@
 <rule-code-style>
 
-Bun + TypeScript. Biome owns formatting and linting.
+Bun + TypeScript. ESLint owns formatting and linting; the `@effect/dprint` rule (wrapping the dprint-typescript formatter) handles formatting from inside ESLint.
 
 <must-do>
 
-- Use Biome for formatting and lint. Config: `biome.json`. Settings: 2-space indent, single quotes, no semicolons (`asNeeded`), trailing commas, 100-col line width. `arrowParentheses: always`.
-- The PostToolUse hook at `.claude/hooks/biome-post-edit.sh` runs `biome check --write --unsafe` on each edited file and blocks the turn on lint failure. Let it run — when it blocks, fix the reported issue rather than disabling the hook.
+- Use ESLint flat config at the repo root (`eslint.config.mjs`). Stack: `@eslint/js` recommended + `typescript-eslint` strict-type-checked + stylistic-type-checked (via project-service) + `@effect/eslint-plugin` (the `dprint` rule + `no-import-from-barrel-package`). dprint config locked to: 2-space indent, single quotes, no semicolons (`semiColons: "asi"`), trailing commas on multi-line, 100-col line width, `arrowFunction.useParentheses: "force"`.
+- The PostToolUse hook at `.claude/hooks/lint-post-edit.sh` queues each touched file; the Stop hook at `.claude/hooks/lint-stop.sh` runs one `eslint` over the deduped set at turn end and blocks the turn on lint failure. Let it run — when it blocks, fix the reported issue rather than disabling the hook.
+- Imports from `effect` and any `@effect/*` package use the namespace form: `import * as Effect from 'effect/Effect'`, never `import { Effect } from 'effect'`. The `@effect/no-import-from-barrel-package` rule enforces this; type-only imports (`import type { X } from 'effect'`) are exempt and may use barrel form.
 
 </must-do>
 
 <readability>
 
-- `style/useBlockStatements` — always brace `if`/`else`/`while`/`for`. No single-line bodies.
-- `style/noNestedTernary` — ternaries don't nest. Lift to named locals or `if`/`else`.
-- `style/useTemplate`, `style/useNumberNamespace`, `style/useConsistentArrayType` — string concat → template literal, `parseInt` → `Number.parseInt`, prefer `T[]` over `Array<T>`.
-- `complexity/noExcessiveCognitiveComplexity` — threshold 15. Refactor into helpers / lookup tables / early returns. Two security-critical functions (`authenticateHttp`, `handleSendDirectMessage`) carry a `// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: security boundary, see comment above` with an audit-trail rationale — leave those alone.
+- `curly` (always brace) — `if`/`else`/`while`/`for` always use braces. No single-line bodies.
+- `no-nested-ternary` — ternaries don't nest. Lift to named locals or `if`/`else`.
+- `prefer-template` — string concat → template literal.
+- `@typescript-eslint/array-type` (`default: 'array'`) — prefer `T[]` over `Array<T>`.
+- `complexity` — cyclomatic threshold 15. Refactor into helpers / lookup tables / early returns. When a function genuinely needs the complexity (security boundaries, protocol state machines), suppress per-line with `// eslint-disable-next-line complexity -- <audit-trail rationale>` and leave it alone.
+- `max-lines-per-function` — threshold 200, generous to accommodate Effect.fn generator bodies. Truly large bodies still trip; refactor into composed Effects when that happens.
 
 </readability>
 
 <vertical-spacing>
 
-Biome 2.4 has no `padding-line-between-statements` equivalent and its GritQL plugins can't match adjacent statements. Biome's formatter *preserves* author-written blanks (collapses 2+ → 1) but never inserts them, so a single blank line at the right spot survives `biome check --write`. The rules below are Claude-enforced on edit — apply them on every file you write or modify.
+dprint preserves author-written blanks (collapses 2+ → 1) but never inserts them, so a single blank line at the right spot survives `eslint --fix`. The rules below are Claude-enforced on edit — apply them on every file you write or modify.
 
 **Core rule: a blank line separates every block-like statement from its non-block neighbours, and precedes every `return` that isn't the first statement in its containing block.**
 
@@ -126,7 +129,8 @@ If you ever find this rule fighting a real edit, document the exception here rat
 <must-not-do>
 
 - Do not add a frontend toolchain (Vite, React, Tailwind, shadcn). If you find yourself reaching for one, you're in the wrong repo.
-- Do not commit code that fails `bun x biome check`. The hook normally catches it; running `bun x biome check --write .` manually before committing is fine.
+- Do not commit code that fails `bunx eslint .`. The pre-commit hook auto-fixes staged files; the pre-push hook runs full-repo as a safety net.
+- Do not import barrel-style from `effect` or `@effect/*` for value imports — see the `no-import-from-barrel-package` rule.
 - Ask before adding dependencies — see `rules/donts.md`.
 
 </must-not-do>
@@ -134,9 +138,8 @@ If you ever find this rule fighting a real edit, document the exception here rat
 <manual-run>
 
 ```bash
-bun x biome check --write . # format + lint + fix what's safe
-bun x biome check .         # format + lint, no writes
-bun x biome lint .          # lint only
+bunx eslint . --fix  # format + lint + fix what's safe
+bunx eslint .        # format + lint, no writes
 ```
 
 </manual-run>

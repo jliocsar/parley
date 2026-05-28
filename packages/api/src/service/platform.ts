@@ -1,14 +1,14 @@
-import { Data, Effect } from 'effect'
-
+import * as Data from 'effect/Data'
+import * as Effect from 'effect/Effect'
 export type Platform = 'systemd' | 'launchd'
 
 export class UnsupportedPlatformError extends Data.TaggedError('UnsupportedPlatformError')<{
   readonly message: string
 }> {}
 
-export const detectPlatform = Effect.fn('detectPlatform')(function* () {
+export const detectPlatform = Effect.fn('detectPlatform')(function*() {
   if (process.platform === 'darwin') {
-    return 'launchd' as Platform
+    return 'launchd'
   }
 
   if (process.platform === 'linux') {
@@ -21,14 +21,15 @@ export const detectPlatform = Effect.fn('detectPlatform')(function* () {
     if (code !== 0) {
       return yield* new UnsupportedPlatformError({
         message:
-          "systemd --user is not available on this system. Install Parley as a service is not supported here — you can still run 'parley-server run' directly.",
+          'systemd --user is not available on this system. Install Parley as a service is not supported here — you can still run \'parley-server run\' directly.',
       })
     }
 
-    return 'systemd' as Platform
+    return 'systemd'
   }
 
   return yield* new UnsupportedPlatformError({
-    message: `Unsupported platform: ${process.platform}. Service install is available on Linux (systemd --user) and macOS (launchd) only.`,
+    message:
+      `Unsupported platform: ${process.platform}. Service install is available on Linux (systemd --user) and macOS (launchd) only.`,
   })
 })

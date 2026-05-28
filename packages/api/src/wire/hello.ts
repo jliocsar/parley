@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import * as Schema from 'effect/Schema'
 
 import { BearerToken, ReconnectToken, SessionId } from '../domain/ids'
 import { RoomName } from '../domain/room'

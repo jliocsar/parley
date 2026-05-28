@@ -1,10 +1,10 @@
-import { Effect, Option } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
 import type { SessionId } from '../domain/ids'
 import type { Nickname } from '../domain/nickname'
 import type { RoomName } from '../domain/room'
 
-export type RoomMember = {
+export interface RoomMember {
   readonly sessionId: SessionId
   readonly nickname: Nickname
 }
@@ -17,7 +17,7 @@ export type JoinResult =
 
 export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('MembershipRegistry', {
   accessors: true,
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const rooms = new Map<RoomName, RoomState>()
 
     const getOrInitRoom = (room: RoomName): RoomState => {
@@ -57,7 +57,9 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
       }).pipe(Effect.withSpan('MembershipRegistry.join'))
 
     const leave = (room: RoomName, sessionId: SessionId) =>
-      Effect.sync(() => leaveSync(room, sessionId)).pipe(
+      Effect.sync(() => {
+        leaveSync(room, sessionId)
+      }).pipe(
         Effect.withSpan('MembershipRegistry.leave'),
       )
 

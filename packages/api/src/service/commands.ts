@@ -1,5 +1,5 @@
-import { Command, Options } from '@effect/cli'
-
+import * as Command from '@effect/cli/Command'
+import * as Options from '@effect/cli/Options'
 import * as ops from './operations'
 
 const purgeOption = Options.boolean('purge').pipe(
@@ -20,8 +20,10 @@ const linesOption = Options.integer('lines').pipe(
 
 const installCmd = Command.make('install', {}, () => ops.install())
 
-const uninstallCmd = Command.make('uninstall', { purge: purgeOption }, ({ purge }) =>
-  ops.uninstall({ purge }),
+const uninstallCmd = Command.make(
+  'uninstall',
+  { purge: purgeOption },
+  ({ purge }) => ops.uninstall({ purge }),
 )
 
 const startCmd = Command.make('start', {}, () => ops.start())

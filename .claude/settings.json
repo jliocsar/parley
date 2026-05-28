@@ -8,7 +8,7 @@
       {
         "hooks": [
           {
-            "command": "bash $CLAUDE_PROJECT_DIR/.agents/hooks/biome-post-edit.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.agents/hooks/lint-post-edit.sh",
             "type": "command"
           }
         ],
@@ -19,7 +19,7 @@
       {
         "hooks": [
           {
-            "command": "bash $CLAUDE_PROJECT_DIR/.agents/hooks/biome-stop.sh",
+            "command": "bash $CLAUDE_PROJECT_DIR/.agents/hooks/lint-stop.sh",
             "type": "command"
           }
         ],

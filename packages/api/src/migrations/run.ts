@@ -1,22 +1,22 @@
 import type { Database } from 'bun:sqlite'
-import { Effect } from 'effect'
+import * as Effect from 'effect/Effect'
 
 import type { DbHandle } from '../services/Db'
 import { embeddedMigrations } from './embedded'
 
-export type MigrationResult = {
+export interface MigrationResult {
   readonly applied: number
   readonly total: number
 }
 
-type DialectMigrate = {
+interface DialectMigrate {
   readonly dialect: {
     migrate(migrations: typeof embeddedMigrations, session: unknown): void
   }
   readonly session: unknown
 }
 
-export const runEmbeddedMigrations = Effect.fn('runEmbeddedMigrations')(function* (db: DbHandle) {
+export const runEmbeddedMigrations = Effect.fn('runEmbeddedMigrations')(function*(db: DbHandle) {
   const total = embeddedMigrations.length
 
   if (total === 0) {

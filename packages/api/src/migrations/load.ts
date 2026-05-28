@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-export type EmbeddedMigration = {
+export interface EmbeddedMigration {
   readonly tag: string
   readonly sql: readonly string[]
   readonly bps: boolean

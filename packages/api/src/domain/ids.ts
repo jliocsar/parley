@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import * as Schema from 'effect/Schema'
 
 export const SessionId = Schema.UUID.pipe(Schema.brand('@parley/SessionId'))
 export type SessionId = Schema.Schema.Type<typeof SessionId>

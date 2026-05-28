@@ -1,4 +1,4 @@
-import { Layer } from 'effect'
+import * as Layer from 'effect/Layer'
 import { TelemetryLive } from './server/Telemetry'
 import { ToolRuntime } from './server/ToolRuntime'
 import { WsServer } from './server/WsServer'

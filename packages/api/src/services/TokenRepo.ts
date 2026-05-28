@@ -1,6 +1,7 @@
 import { eq } from 'drizzle-orm'
-import { Effect, Option, Schema } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
+import * as Schema from 'effect/Schema'
 import { authTokens } from '../db/schema/auth-tokens'
 import { AuthTokenRecord } from '../domain/auth'
 import type { AuthLabel } from '../domain/ids'
@@ -9,7 +10,7 @@ import { Db } from './Db'
 export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
   accessors: true,
   dependencies: [Db.Default],
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const db = yield* Db
 
     const decode = (row: {
@@ -26,9 +27,9 @@ export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
       })
 
     const findFirstBy = (column: typeof authTokens.label | typeof authTokens.tokenHash) =>
-      Effect.fn('TokenRepo.findFirstBy')(function* (value: string) {
+      Effect.fn('TokenRepo.findFirstBy')(function*(value: string) {
         const rows = yield* db.run((h) =>
-          h.select().from(authTokens).where(eq(column, value)).limit(1),
+          h.select().from(authTokens).where(eq(column, value)).limit(1)
         )
 
         const row = rows[0]
@@ -38,21 +39,21 @@ export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
     const findByLabel = findFirstBy(authTokens.label)
     const findByHash = findFirstBy(authTokens.tokenHash)
 
-    const insert = Effect.fn('TokenRepo.insert')(function* (label: AuthLabel, tokenHash: string) {
+    const insert = Effect.fn('TokenRepo.insert')(function*(label: AuthLabel, tokenHash: string) {
       yield* db.run((h) => h.insert(authTokens).values({ label, tokenHash, createdAt: new Date() }))
     })
 
-    const deleteByLabel = Effect.fn('TokenRepo.deleteByLabel')(function* (label: AuthLabel) {
+    const deleteByLabel = Effect.fn('TokenRepo.deleteByLabel')(function*(label: AuthLabel) {
       yield* db.run((h) => h.delete(authTokens).where(eq(authTokens.label, label)))
     })
 
-    const touchLastUsed = Effect.fn('TokenRepo.touchLastUsed')(function* (label: AuthLabel) {
+    const touchLastUsed = Effect.fn('TokenRepo.touchLastUsed')(function*(label: AuthLabel) {
       yield* db.run((h) =>
-        h.update(authTokens).set({ lastUsedAt: new Date() }).where(eq(authTokens.label, label)),
+        h.update(authTokens).set({ lastUsedAt: new Date() }).where(eq(authTokens.label, label))
       )
     })
 
-    const listAll = Effect.fn('TokenRepo.listAll')(function* () {
+    const listAll = Effect.fn('TokenRepo.listAll')(function*() {
       const rows = yield* db.run((h) => h.select().from(authTokens))
       return yield* Effect.forEach(rows, decode)
     })

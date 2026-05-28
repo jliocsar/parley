@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import * as Schema from 'effect/Schema'
 
 export const NicknameRegex = /^[A-Za-z0-9][A-Za-z0-9_-]{0,31}$/
 

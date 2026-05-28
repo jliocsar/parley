@@ -135,7 +135,7 @@ cd parley
 bun install
 ```
 
-Requirements: **Bun ≥ 1.1**. Everything else (Drizzle, Effect, the MCP SDK, Biome) is a workspace dep.
+Requirements: **Bun ≥ 1.1**. Everything else (Drizzle, Effect, the MCP SDK, ESLint) is a workspace dep.
 
 ### 2. Run database migrations
 
@@ -192,11 +192,11 @@ alias claude:parley="claude --dangerously-load-development-channels 'plugin:parl
 ### 6. Lint / test
 
 ```shell
-bun x biome check --write .          # format + lint + fix
+bunx eslint . --fix                  # format + lint + fix
 bun --filter '@parley/*' test        # run all package tests
 ```
 
-The PostToolUse hook at `.claude/hooks/biome-post-edit.sh` runs `biome check --write --unsafe` after every edit — let it do its job.
+The Stop hook at `.claude/hooks/lint-stop.sh` runs `eslint` over files touched in the turn — let it do its job.
 
 ---
 
@@ -386,7 +386,7 @@ url = "ws://127.0.0.1:7539"
 │   └── config/              # shared tsconfig bases
 ├── CONTEXT.md               # ubiquitous language + relationships
 ├── CLAUDE.md                # project instructions
-└── biome.json
+└── eslint.config.mjs
 ```
 
 The architectural rationale for everything above lives in [`docs/adr/`](docs/adr) — start with `0001-mcp-is-the-bidirectional-pipe.md`.

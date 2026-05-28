@@ -16,6 +16,7 @@
   },
   "scripts": {
     "test": "bun test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
     "start": "bun run ./src/bin/parley-server.ts run",
     "build:bin": "bun run ./scripts/build.ts",
     "db:generate": "bun x drizzle-kit generate",

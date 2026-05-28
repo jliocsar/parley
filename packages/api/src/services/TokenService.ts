@@ -1,5 +1,6 @@
-import { DateTime, Effect, Option } from 'effect'
-
+import * as DateTime from 'effect/DateTime'
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
 import type { IssuedToken } from '../domain/auth'
 import type { AuthLabel, BearerToken } from '../domain/ids'
 import { TokenRevokedError } from '../errors/auth'
@@ -9,11 +10,11 @@ import { TokenRepo } from './TokenRepo'
 export class TokenService extends Effect.Service<TokenService>()('TokenService', {
   accessors: true,
   dependencies: [TokenRepo.Default, CryptoService.Default],
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const repo = yield* TokenRepo
     const crypto = yield* CryptoService
 
-    const issue = Effect.fn('TokenService.issue')(function* (label: AuthLabel) {
+    const issue = Effect.fn('TokenService.issue')(function*(label: AuthLabel) {
       const token = yield* crypto.issueBearerToken()
       const hash = yield* crypto.hashToken(token)
 
@@ -28,15 +29,15 @@ export class TokenService extends Effect.Service<TokenService>()('TokenService',
       return { label, token, createdAt } satisfies IssuedToken
     })
 
-    const revoke = Effect.fn('TokenService.revoke')(function* (label: AuthLabel) {
+    const revoke = Effect.fn('TokenService.revoke')(function*(label: AuthLabel) {
       yield* repo.deleteByLabel(label)
     })
 
-    const list = Effect.fn('TokenService.list')(function* () {
+    const list = Effect.fn('TokenService.list')(function*() {
       return yield* repo.listAll()
     })
 
-    const verify = Effect.fn('TokenService.verify')(function* (presented: BearerToken) {
+    const verify = Effect.fn('TokenService.verify')(function*(presented: BearerToken) {
       const hash = yield* crypto.hashToken(presented)
       const record = yield* repo.findByHash(hash)
 

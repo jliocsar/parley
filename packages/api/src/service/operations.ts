@@ -1,8 +1,9 @@
 import { mkdir, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import { Data, Effect } from 'effect'
+import * as Data from 'effect/Data'
 
+import * as Effect from 'effect/Effect'
 import {
   ENV_FILE,
   LAUNCHD_ERR_LOG,
@@ -20,7 +21,7 @@ export class ServiceCommandError extends Data.TaggedError('ServiceCommandError')
   readonly message: string
 }> {}
 
-const resolveBinaryPath = Effect.fn('resolveBinaryPath')(function* () {
+const resolveBinaryPath = Effect.fn('resolveBinaryPath')(function*() {
   const argv0 = process.argv[0]
 
   if (argv0?.endsWith(SERVICE_LABEL)) {
@@ -33,7 +34,8 @@ const resolveBinaryPath = Effect.fn('resolveBinaryPath')(function* () {
 
   if (code !== 0 || out.trim().length === 0) {
     return yield* new ServiceCommandError({
-      message: `Could not locate the 'parley-server' binary on $PATH. Run 'bun run install:bin' from the repo first.`,
+      message:
+        `Could not locate the 'parley-server' binary on $PATH. Run 'bun run install:bin' from the repo first.`,
     })
   }
 
@@ -58,7 +60,7 @@ const removeFile = (path: string) =>
     catch: () => new ServiceCommandError({ message: `Could not remove ${path}` }),
   }).pipe(Effect.catchAll(() => Effect.void))
 
-const ensureEnvFile = Effect.fn('ensureEnvFile')(function* () {
+const ensureEnvFile = Effect.fn('ensureEnvFile')(function*() {
   const file = Bun.file(ENV_FILE)
   const exists = yield* Effect.promise(() => file.exists())
 
@@ -81,7 +83,7 @@ const runCmd = (
   cmd: string[],
   opts: { capture?: boolean; failOnNonZero?: boolean } = {},
 ): Effect.Effect<{ code: number; stdout: string; stderr: string }, ServiceCommandError> =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const proc = Bun.spawn(cmd, {
       stdout: opts.capture ? 'pipe' : 'inherit',
       stderr: opts.capture ? 'pipe' : 'inherit',
@@ -101,7 +103,7 @@ const runCmd = (
 
 const launchdDomain = () => `gui/${process.getuid?.() ?? ''}`
 
-type PlatformCommands = {
+interface PlatformCommands {
   readonly install: (binary: string) => Effect.Effect<void, ServiceCommandError>
   readonly uninstall: Effect.Effect<void, ServiceCommandError>
   readonly start: Effect.Effect<void, ServiceCommandError>
@@ -120,7 +122,7 @@ const launchdService = () => `${launchdDomain()}/${LAUNCHD_LABEL}`
 const platformCommands: Record<Platform, PlatformCommands> = {
   systemd: {
     install: (binary) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         yield* writeFile(SYSTEMD_UNIT_PATH, renderSystemdUnit(binary))
         yield* Effect.logInfo(`Wrote ${SYSTEMD_UNIT_PATH}`)
         yield* runCmd(['systemctl', '--user', 'daemon-reload'], { failOnNonZero: true })
@@ -132,7 +134,7 @@ const platformCommands: Record<Platform, PlatformCommands> = {
           `Tip: 'loginctl enable-linger $USER' lets the service survive logout (one-time, off by default).`,
         )
       }),
-    uninstall: Effect.gen(function* () {
+    uninstall: Effect.gen(function*() {
       yield* runCmd(['systemctl', '--user', 'disable', '--now', serviceUnit], { capture: true })
       yield* removeFile(SYSTEMD_UNIT_PATH)
       yield* runCmd(['systemctl', '--user', 'daemon-reload'], { capture: true })
@@ -163,7 +165,7 @@ const platformCommands: Record<Platform, PlatformCommands> = {
   },
   launchd: {
     install: (binary) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         yield* Effect.tryPromise({
           try: () => mkdir(LAUNCHD_LOG_DIR, { recursive: true }),
           catch: (e) =>
@@ -184,7 +186,7 @@ const platformCommands: Record<Platform, PlatformCommands> = {
         })
         yield* Effect.logInfo(`Service installed and started.`)
       }),
-    uninstall: Effect.gen(function* () {
+    uninstall: Effect.gen(function*() {
       yield* runCmd(['launchctl', 'bootout', launchdDomain(), LAUNCHD_PLIST_PATH], {
         capture: true,
       })
@@ -216,18 +218,18 @@ const platformCommands: Record<Platform, PlatformCommands> = {
 const withPlatform = <A>(
   f: (commands: PlatformCommands) => Effect.Effect<A, ServiceCommandError>,
 ) =>
-  Effect.gen(function* () {
+  Effect.gen(function*() {
     const platform = yield* detectPlatform()
     return yield* f(platformCommands[platform])
   }).pipe(Effect.withSpan('service.withPlatform'))
 
-export const install = Effect.fn('service.install')(function* () {
+export const install = Effect.fn('service.install')(function*() {
   const binary = yield* resolveBinaryPath()
   yield* ensureEnvFile()
   yield* withPlatform((commands) => commands.install(binary))
 })
 
-export const uninstall = Effect.fn('service.uninstall')(function* (opts: { purge: boolean }) {
+export const uninstall = Effect.fn('service.uninstall')(function*(opts: { purge: boolean }) {
   yield* withPlatform((commands) => commands.uninstall)
 
   if (opts.purge) {
@@ -238,22 +240,22 @@ export const uninstall = Effect.fn('service.uninstall')(function* (opts: { purge
   yield* Effect.logInfo('Service uninstalled.')
 })
 
-export const start = Effect.fn('service.start')(function* () {
+export const start = Effect.fn('service.start')(function*() {
   yield* withPlatform((commands) => commands.start)
 })
 
-export const stop = Effect.fn('service.stop')(function* () {
+export const stop = Effect.fn('service.stop')(function*() {
   yield* withPlatform((commands) => commands.stop)
 })
 
-export const restart = Effect.fn('service.restart')(function* () {
+export const restart = Effect.fn('service.restart')(function*() {
   yield* withPlatform((commands) => commands.restart)
 })
 
-export const status = Effect.fn('service.status')(function* () {
+export const status = Effect.fn('service.status')(function*() {
   yield* withPlatform((commands) => commands.status)
 })
 
-export const logs = Effect.fn('service.logs')(function* (opts: { follow: boolean; lines: number }) {
+export const logs = Effect.fn('service.logs')(function*(opts: { follow: boolean; lines: number }) {
   yield* withPlatform((commands) => commands.logs(opts))
 })

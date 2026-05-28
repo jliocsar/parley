@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { Effect } from 'effect'
+import * as Effect from 'effect/Effect'
 
 import { SessionId } from '../domain/ids'
 import { Nickname } from '../domain/nickname'
@@ -18,7 +18,7 @@ const run = <A>(eff: Effect.Effect<A, unknown, MembershipRegistry>) =>
 describe('MembershipRegistry.join', () => {
   it('frees the previous nickname when the same session rejoins with a different nickname', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const reg = yield* MembershipRegistry
 
         const first = yield* reg.join(room, sessionA, nickOne)
@@ -35,7 +35,7 @@ describe('MembershipRegistry.join', () => {
 
   it('reports collision when a different session holds the nickname', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const reg = yield* MembershipRegistry
 
         yield* reg.join(room, sessionA, nickOne)
@@ -52,7 +52,7 @@ describe('MembershipRegistry.join', () => {
 
   it('is idempotent for the same (session, nickname)', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const reg = yield* MembershipRegistry
 
         yield* reg.join(room, sessionA, nickOne)
@@ -77,7 +77,7 @@ describe('MembershipRegistry.dropSession', () => {
   // session-expiry path in WsServer — never directly from a `close` handler.
   it('removes the session from every room it joined', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const reg = yield* MembershipRegistry
         const otherRoom = RoomName.make('arena')
 
@@ -99,7 +99,7 @@ describe('MembershipRegistry.dropSession', () => {
 
   it('does not affect other sessions in the same room', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const reg = yield* MembershipRegistry
 
         yield* reg.join(room, sessionA, nickOne)

@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import * as Effect from 'effect/Effect'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { Effect } from 'effect'
 
 import { ensureLocalServerEntry, renderLocalServersToml } from './ConfigBootstrap'
 
@@ -18,7 +18,7 @@ afterEach(() => {
   rmSync(workdir, { recursive: true, force: true })
 })
 
-const run = <A, E>(eff: Effect.Effect<A, E, never>) => Effect.runPromise(eff)
+const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff)
 
 describe('ensureLocalServerEntry', () => {
   it('writes servers.toml with the local entry on first boot when bound to loopback', async () => {

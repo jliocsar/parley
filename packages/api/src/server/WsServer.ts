@@ -1,6 +1,9 @@
 import type { ServerWebSocket } from 'bun'
-import { Effect, Fiber, Option, Runtime, Schema } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as Fiber from 'effect/Fiber'
+import * as Option from 'effect/Option'
+import * as Runtime from 'effect/Runtime'
+import * as Schema from 'effect/Schema'
 import { ServerConfig } from '../config'
 import type { AuthLabel, BearerToken } from '../domain/ids'
 import { SessionId } from '../domain/ids'
@@ -25,7 +28,7 @@ import { ToolRuntime } from './ToolRuntime'
 const SERVER_VERSION = '0.1.0'
 const SESSION_EXPIRY_MS = 60_000
 
-type WsData = {
+interface WsData {
   sessionId: SessionId
   handshakeComplete: boolean
 }
@@ -47,7 +50,8 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     CryptoService.Default,
     ToolRuntime.Default,
   ],
-  scoped: Effect.gen(function* () {
+  // eslint-disable-next-line max-lines-per-function -- full WS server lifecycle (helpers + handlers + listener); extracting into helpers would scatter the closure over `config`/`fork`/registries
+  scoped: Effect.gen(function*() {
     const config = yield* ServerConfig
     const tokens = yield* TokenService
     const sessions = yield* SessionRegistry
@@ -57,18 +61,18 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     const cryptoSvc = yield* CryptoService
     const tools = yield* ToolRuntime
 
-    const runtime = yield* Effect.runtime<never>()
-    const fork = <A, E>(eff: Effect.Effect<A, E, never>) => Runtime.runFork(runtime)(eff)
+    const runtime = yield* Effect.runtime()
+    const fork = <A, E>(eff: Effect.Effect<A, E>) => Runtime.runFork(runtime)(eff)
 
-    const expiryFibers = new Map<SessionId, Fiber.RuntimeFiber<void, never>>()
+    const expiryFibers = new Map<SessionId, Fiber.RuntimeFiber<void>>()
 
     yield* Effect.addFinalizer(() =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         yield* Effect.forEach(Array.from(expiryFibers.values()), Fiber.interrupt, {
           discard: true,
         })
         expiryFibers.clear()
-      }),
+      })
     )
 
     const safeSend = (ws: ServerWebSocket<WsData>, json: string) =>
@@ -78,6 +82,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         } catch {}
       })
 
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- `I` documents the encoder's output shape for readers
     const sendEncoded = <A, I>(
       ws: ServerWebSocket<WsData>,
       encode: (a: A) => I,
@@ -126,7 +131,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         Effect.catchAll((err) =>
           err._tag === 'TokenRevokedError'
             ? Effect.fail(err)
-            : Effect.fail(new TokenRevokedError({ label: '', message: err.message })),
+            : Effect.fail(new TokenRevokedError({ label: '', message: err.message }))
         ),
       )
     }
@@ -137,25 +142,31 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       message: string,
     ) =>
       sendHelloErr(ws, code, message).pipe(
-        Effect.zipRight(Effect.sync(() => ws.close(4000, 'auth failed'))),
+        Effect.zipRight(Effect.sync(() => {
+          ws.close(4000, 'auth failed')
+        })),
       )
 
     const handleResumeHello = (
       ws: ServerWebSocket<WsData>,
       resume: NonNullable<HelloFrame['resume']>,
     ) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const existing = yield* sessions.get(resume.sessionId)
 
         if (Option.isNone(existing)) {
           yield* sendHelloErr(ws, 'UnknownSessionError', 'No such session')
-          yield* Effect.sync(() => ws.close(4001, 'unknown session'))
+          yield* Effect.sync(() => {
+            ws.close(4001, 'unknown session')
+          })
           return
         }
 
         if (existing.value.reconnectToken !== resume.reconnectToken) {
           yield* sendHelloErr(ws, 'BadReconnectTokenError', 'Bad reconnect token')
-          yield* Effect.sync(() => ws.close(4002, 'bad reconnect token'))
+          yield* Effect.sync(() => {
+            ws.close(4002, 'bad reconnect token')
+          })
           return
         }
 
@@ -165,7 +176,9 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
         if (replayed._tag === 'Left') {
           yield* sendHelloErr(ws, 'ReplayBufferOverflowError', replayed.left.message)
-          yield* Effect.sync(() => ws.close(4003, 'replay buffer overflow'))
+          yield* Effect.sync(() => {
+            ws.close(4003, 'replay buffer overflow')
+          })
           return
         }
 
@@ -185,7 +198,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       })
 
     const handleFreshHello = (ws: ServerWebSocket<WsData>, hello: HelloFrame) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const label = yield* runAuth(hello.authToken)
         const reconnectToken = yield* cryptoSvc.issueReconnectToken()
         const sessionId = ws.data.sessionId
@@ -215,12 +228,14 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       )
 
     const handleHello = (ws: ServerWebSocket<WsData>, raw: unknown) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const decoded = yield* decodeHello(raw).pipe(Effect.either)
 
         if (decoded._tag === 'Left') {
           yield* sendHelloErr(ws, 'BadHandshakeFrameError', 'Could not decode hello frame')
-          yield* Effect.sync(() => ws.close(1002, 'bad handshake'))
+          yield* Effect.sync(() => {
+            ws.close(1002, 'bad handshake')
+          })
           return
         }
 
@@ -239,12 +254,12 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         .run(ws.data.sessionId, frame)
         .pipe(
           Effect.flatMap((response) =>
-            response === undefined ? Effect.void : sendServerFrame(ws, response),
+            response === undefined ? Effect.void : sendServerFrame(ws, response)
           ),
         )
 
     const handleMessage = (ws: ServerWebSocket<WsData>, text: string) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const parsed = yield* Effect.try({
           try: () => JSON.parse(text) as unknown,
           catch: () => 'bad-json' as const,
@@ -275,7 +290,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
         yield* dispatch(ws, frameResult.right).pipe(
           Effect.catchAllCause((cause) =>
-            Effect.gen(function* () {
+            Effect.gen(function*() {
               yield* Effect.logError('client frame handler crashed', cause)
 
               const tag = frameResult.right._tag
@@ -288,13 +303,13 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
                   'Internal server error',
                 )
               }
-            }),
+            })
           ),
         )
       }).pipe(Effect.catchAllCause((cause) => Effect.logError('handleMessage crashed', cause)))
 
     const performSessionExpiry = (sessionId: SessionId) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         yield* memberships.dropSession(sessionId)
         yield* fanout.dropSession(sessionId)
         yield* rateLimiter.dropSession(sessionId)
@@ -311,7 +326,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       })
 
     const cancelExpiry = (sessionId: SessionId) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const fiber = expiryFibers.get(sessionId)
 
         if (fiber) {
@@ -321,7 +336,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
       })
 
     const handleClose = (ws: ServerWebSocket<WsData>) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const sessionId = ws.data.sessionId
 
         if (!ws.data.handshakeComplete) {
@@ -342,12 +357,13 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
             const sessionId = SessionId.make(crypto.randomUUID())
 
             if (srv.upgrade(req, { data: { sessionId, handshakeComplete: false } })) {
-              return undefined as unknown as Response
+              return undefined
             }
 
             return new Response('upgrade failed', { status: 400 })
           },
           websocket: {
+            // eslint-disable-next-line @typescript-eslint/no-empty-function -- Bun WS requires a handler; per-session setup happens in `message` on the `hello` frame
             open(_ws: ServerWebSocket<WsData>) {},
             message(ws: ServerWebSocket<WsData>, data: string | Buffer) {
               const text = typeof data === 'string' ? data : data.toString('utf8')
@@ -357,7 +373,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
               fork(handleClose(ws))
             },
           },
-        }),
+        })
       ),
       (s) => Effect.promise(() => s.stop()),
     )

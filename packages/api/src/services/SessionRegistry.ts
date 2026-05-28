@@ -1,11 +1,15 @@
 import type { ServerWebSocket } from 'bun'
-import { Effect, MutableHashMap, Option } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as MutableHashMap from 'effect/MutableHashMap'
+import * as Option from 'effect/Option'
 import type { AuthLabel, ReconnectToken, SessionId } from '../domain/ids'
 
-type SocketData = { sessionId: SessionId; handshakeComplete: boolean }
+interface SocketData {
+  sessionId: SessionId
+  handshakeComplete: boolean
+}
 
-export type SessionState = {
+export interface SessionState {
   readonly id: SessionId
   readonly authLabel: Option.Option<AuthLabel>
   readonly clientVersion: string
@@ -16,7 +20,7 @@ export type SessionState = {
 
 export class SessionRegistry extends Effect.Service<SessionRegistry>()('SessionRegistry', {
   accessors: true,
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const store = MutableHashMap.empty<SessionId, SessionState>()
 
     const updateSocket = (id: SessionId, socket: Option.Option<ServerWebSocket<SocketData>>) => {
@@ -36,12 +40,16 @@ export class SessionRegistry extends Effect.Service<SessionRegistry>()('SessionR
       Effect.sync(() => MutableHashMap.get(store, id)).pipe(Effect.withSpan('SessionRegistry.get'))
 
     const attachSocket = (id: SessionId, socket: ServerWebSocket<SocketData>) =>
-      Effect.sync(() => updateSocket(id, Option.some(socket))).pipe(
+      Effect.sync(() => {
+        updateSocket(id, Option.some(socket))
+      }).pipe(
         Effect.withSpan('SessionRegistry.attachSocket'),
       )
 
     const detachSocket = (id: SessionId) =>
-      Effect.sync(() => updateSocket(id, Option.none())).pipe(
+      Effect.sync(() => {
+        updateSocket(id, Option.none())
+      }).pipe(
         Effect.withSpan('SessionRegistry.detachSocket'),
       )
 

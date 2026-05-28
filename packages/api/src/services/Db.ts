@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
 import { type BunSQLiteDatabase, drizzle } from 'drizzle-orm/bun-sqlite'
-import { Effect } from 'effect'
+import * as Effect from 'effect/Effect'
 import { ServerConfig } from '../config'
 import * as schema from '../db/schema'
 
@@ -9,7 +9,7 @@ export type DbClient = Database
 
 export class Db extends Effect.Service<Db>()('Db', {
   accessors: true,
-  scoped: Effect.gen(function* () {
+  scoped: Effect.gen(function*() {
     const config = yield* ServerConfig
 
     const client = yield* Effect.acquireRelease(
@@ -19,7 +19,10 @@ export class Db extends Effect.Service<Db>()('Db', {
         c.run('PRAGMA foreign_keys = ON')
         return c
       }),
-      (c) => Effect.sync(() => c.close()),
+      (c) =>
+        Effect.sync(() => {
+          c.close()
+        }),
     )
 
     const handle: DbHandle = drizzle({ client, schema })

@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+# Pre-push safety net: full-repo ESLint over every TS file. Slower than
+# the per-file pre-commit pass, but catches drift on files the staged
+# pass never saw (e.g., when a typed change in one file invalidates
+# inference in another that wasn't staged).
+
+bunx eslint . || exit 1

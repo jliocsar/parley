@@ -1,6 +1,6 @@
+import * as Config from 'effect/Config'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { Config } from 'effect'
 
 const DEFAULT_DB_FILE = join(homedir(), '.local', 'share', 'parley', 'parley.db')
 

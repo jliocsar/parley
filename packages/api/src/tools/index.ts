@@ -1,7 +1,7 @@
 export * as JoinRoom from './join-room'
 export * as LeaveRoom from './leave-room'
 export * as ListRooms from './list-rooms'
-export { TOOLS, type ToolName } from './registry'
+export { type ToolName, TOOLS } from './registry'
 export * as SendMessage from './send-message'
 export * as WhoIsHere from './who-is-here'
 

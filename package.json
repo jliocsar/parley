@@ -7,15 +7,19 @@
   ],
   "scripts": {
     "prepare": "husky",
-    "build:bin": "bun --filter '@parley/cli' run build:bin && bun --filter '@parley/api' run build:bin",
+    "typecheck": "bun run --filter '@parley/*' typecheck",
+    "build:bin": "bun run --filter '@parley/cli' build:bin && bun run --filter '@parley/api' build:bin",
     "install:bin": "bun run ./scripts/install-bins.ts"
   },
   "devDependencies": {
-    "@biomejs/biome": "^2.4.14",
+    "@effect/eslint-plugin": "^0.3.2",
     "@effect/language-service": "^0.86.1",
+    "@eslint/js": "^10.0.1",
     "@types/bun": "latest",
     "comptime.ts": "^0.8.1",
-    "husky": "^9.1.7"
+    "eslint": "^10.4.0",
+    "husky": "^9.1.7",
+    "typescript-eslint": "^8.60.0"
   },
   "peerDependencies": {
     "typescript": "^5"

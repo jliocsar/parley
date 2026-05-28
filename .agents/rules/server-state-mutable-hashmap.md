@@ -14,7 +14,9 @@ Process-local registries that hold in-memory state use simple mutable structures
 <pattern>
 
 ```ts
-import { Effect, MutableHashMap, Option } from 'effect'
+import * as Effect from 'effect/Effect'
+import * as MutableHashMap from 'effect/MutableHashMap'
+import * as Option from 'effect/Option'
 
 const store = MutableHashMap.empty<SessionId, Bucket>()
 

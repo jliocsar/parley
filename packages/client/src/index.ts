@@ -5,7 +5,7 @@ export { HandshakeFailedError, ParleyClient } from './ParleyClient'
 export type { WsConfig } from './WsConnection'
 export { WsConnection } from './WsConnection'
 
-import { Layer } from 'effect'
+import * as Layer from 'effect/Layer'
 
 import { Handshake } from './Handshake'
 import { ParleyClient } from './ParleyClient'

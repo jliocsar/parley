@@ -1,11 +1,12 @@
-import { Effect, MutableHashMap, Option } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as MutableHashMap from 'effect/MutableHashMap'
+import * as Option from 'effect/Option'
 import type { SessionId } from '../domain/ids'
 
 const CAPACITY = 20
 const REFILL_PER_SECOND = 10
 
-type Bucket = {
+interface Bucket {
   readonly tokens: number
   readonly lastRefillMs: number
 }
@@ -14,7 +15,7 @@ type ConsumeResult = { readonly ok: true } | { readonly ok: false; readonly retr
 
 export class RateLimiter extends Effect.Service<RateLimiter>()('RateLimiter', {
   accessors: true,
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const store = MutableHashMap.empty<SessionId, Bucket>()
 
     const tryConsume = (id: SessionId) =>

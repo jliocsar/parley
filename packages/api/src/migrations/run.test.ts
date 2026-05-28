@@ -1,10 +1,10 @@
 import { Database } from 'bun:sqlite'
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { drizzle } from 'drizzle-orm/bun-sqlite'
+import * as Effect from 'effect/Effect'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { drizzle } from 'drizzle-orm/bun-sqlite'
-import { Effect } from 'effect'
 
 import * as schema from '../db/schema'
 import type { DbHandle } from '../services/Db'
@@ -18,7 +18,7 @@ let handle: DbHandle
 beforeEach(() => {
   workdir = mkdtempSync(join(tmpdir(), 'parley-migrate-'))
   client = new Database(join(workdir, 'test.db'), { create: true })
-  handle = drizzle({ client, schema }) as DbHandle
+  handle = drizzle({ client, schema })
 })
 
 afterEach(() => {
@@ -26,7 +26,7 @@ afterEach(() => {
   rmSync(workdir, { recursive: true, force: true })
 })
 
-const run = <A, E>(eff: Effect.Effect<A, E, never>) => Effect.runPromise(eff)
+const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff)
 
 describe('runEmbeddedMigrations', () => {
   it('applies all embedded migrations on first run', async () => {
@@ -35,7 +35,7 @@ describe('runEmbeddedMigrations', () => {
     expect(result.total).toBe(embeddedMigrations.length)
 
     const tables = client
-      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type='table'")
+      .query<{ name: string }, []>('SELECT name FROM sqlite_master WHERE type=\'table\'')
       .all()
       .map((r) => r.name)
     expect(tables).toContain('rooms')

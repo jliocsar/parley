@@ -1,9 +1,11 @@
+import { BearerToken } from '@parley/api/domain'
+import { TOML } from 'bun'
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
+import * as Schema from 'effect/Schema'
 import { mkdir } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
-import { BearerToken } from '@parley/api/domain'
-import { TOML } from 'bun'
-import { Effect, Option, Schema } from 'effect'
 
 const CONFIG_PATH = join(homedir(), '.config', 'parley', 'servers.toml')
 
@@ -51,8 +53,8 @@ export const renderServersToml = (cfg: ServersConfigShape) => {
 
 export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfig', {
   accessors: true,
-  effect: Effect.gen(function* () {
-    const read = Effect.fn('ServersConfig.read')(function* () {
+  effect: Effect.gen(function*() {
+    const read = Effect.fn('ServersConfig.read')(function*() {
       const file = Bun.file(CONFIG_PATH)
       const exists = yield* Effect.promise(() => file.exists())
 
@@ -64,17 +66,17 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
       return yield* parseServersToml(text)
     })
 
-    const write = Effect.fn('ServersConfig.write')(function* (cfg: ServersConfigShape) {
+    const write = Effect.fn('ServersConfig.write')(function*(cfg: ServersConfigShape) {
       yield* Effect.promise(() => mkdir(dirname(CONFIG_PATH), { recursive: true }))
       yield* Effect.promise(() => Bun.write(CONFIG_PATH, renderServersToml(cfg)))
     })
 
-    const list = Effect.fn('ServersConfig.list')(function* () {
+    const list = Effect.fn('ServersConfig.list')(function*() {
       const cfg = yield* read()
       return cfg
     })
 
-    const resolve = Effect.fn('ServersConfig.resolve')(function* (name: Option.Option<string>) {
+    const resolve = Effect.fn('ServersConfig.resolve')(function*(name: Option.Option<string>) {
       const cfg = yield* read()
 
       const chosen = Option.match(name, {
@@ -103,7 +105,7 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
       }
     })
 
-    const add = Effect.fn('ServersConfig.add')(function* (
+    const add = Effect.fn('ServersConfig.add')(function*(
       name: string,
       url: string,
       token: Option.Option<BearerToken>,
@@ -120,7 +122,7 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
       yield* write(next)
     })
 
-    const remove = Effect.fn('ServersConfig.remove')(function* (name: string) {
+    const remove = Effect.fn('ServersConfig.remove')(function*(name: string) {
       const cfg = yield* read()
       const { [name]: _removed, ...rest } = cfg.servers
       const next: ServersConfigShape = {
@@ -131,7 +133,7 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
       yield* write(next)
     })
 
-    const setDefault = Effect.fn('ServersConfig.setDefault')(function* (name: string) {
+    const setDefault = Effect.fn('ServersConfig.setDefault')(function*(name: string) {
       const cfg = yield* read()
 
       if (!cfg.servers[name]) {

@@ -1,4 +1,4 @@
-import { Schema } from 'effect'
+import * as Schema from 'effect/Schema'
 
 import { MessageId } from '../domain/ids'
 import { MessageBody } from '../domain/message'

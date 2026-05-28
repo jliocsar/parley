@@ -1,12 +1,19 @@
+// low-level Server needed for setRequestHandler; McpServer migration is a separate effort
 import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { MCP_SERVER_INSTRUCTIONS } from '@parley/api/tools'
 import { ParleyClient } from '@parley/client'
-import { Cause, Effect, Exit, JSONSchema, Layer, Runtime, Schema, Stream } from 'effect'
-
+import * as Cause from 'effect/Cause'
+import * as Effect from 'effect/Effect'
+import * as Exit from 'effect/Exit'
+import * as JSONSchema from 'effect/JSONSchema'
+import * as Layer from 'effect/Layer'
+import * as Runtime from 'effect/Runtime'
+import * as Schema from 'effect/Schema'
+import * as Stream from 'effect/Stream'
 import { ChannelDelivery } from './ChannelDelivery'
-import { TOOLS, type ToolName } from './tools/registry'
+import { type ToolName, TOOLS } from './tools/registry'
 
 // MCP requires every tool's inputSchema to be a JSON-Schema object with `type: "object"`.
 // `JSONSchema.make(Schema.Struct({}))` emits `{ anyOf: [{type:'object'},{type:'array'}] }` which
@@ -43,32 +50,32 @@ const exitToContent = (exit: Exit.Exit<unknown, unknown>) =>
 export class McpServer extends Effect.Service<McpServer>()('McpServer', {
   accessors: true,
   dependencies: [ChannelDelivery.Default, ParleyClient.Default],
-  scoped: Effect.gen(function* () {
+  scoped: Effect.gen(function*() {
     const channels = yield* ChannelDelivery
     const client = yield* ParleyClient
-    const runtime = yield* Effect.runtime<never>()
+    const runtime = yield* Effect.runtime()
 
     yield* Effect.forkScoped(
       Stream.runForEach(client.incoming, (event) =>
         event._tag === 'room.message'
           ? channels.deliverMessage(event).pipe(Effect.zipRight(client.ack(event.room, event.seq)))
-          : channels.deliverSystemError(event),
-      ),
+          : channels.deliverSystemError(event)),
     )
 
     const makeHandler = <A, AI, R, RI>(
       schema: { args: Schema.Schema<A, AI>; result: Schema.Schema<R, RI> },
-      run: (args: A) => Effect.Effect<R, unknown, never>,
+      run: (args: A) => Effect.Effect<R, unknown>,
     ) => {
       const decode = Schema.decodeUnknown(schema.args)
       const encode = Schema.encodeSync(schema.result)
-      return (args: Record<string, unknown>): Effect.Effect<unknown, unknown, never> =>
+      return (args: Record<string, unknown>): Effect.Effect<unknown, unknown> =>
         decode(args).pipe(Effect.flatMap(run), Effect.map(encode))
     }
 
-    const handlers: {
-      [K in ToolName]: (args: Record<string, unknown>) => Effect.Effect<unknown, unknown, never>
-    } = {
+    const handlers: Record<
+      ToolName,
+      (args: Record<string, unknown>) => Effect.Effect<unknown, unknown>
+    > = {
       join_room: makeHandler(TOOLS.join_room, (a) => client.joinRoom(a.room, a.nickname)),
       leave_room: makeHandler(TOOLS.leave_room, (a) => client.leaveRoom(a.room)),
       list_rooms: makeHandler(TOOLS.list_rooms, () => client.listRooms()),
@@ -76,6 +83,7 @@ export class McpServer extends Effect.Service<McpServer>()('McpServer', {
       who_is_here: makeHandler(TOOLS.who_is_here, (a) => client.whoIsHere(a.room)),
     }
 
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- see import note
     const server = new Server(
       { name: 'parley', version: '0.0.0' },
       {
@@ -89,6 +97,7 @@ export class McpServer extends Effect.Service<McpServer>()('McpServer', {
 
     yield* channels.register(server)
 
+    // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK setRequestHandler expects an async handler signature
     server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: (Object.keys(TOOLS) as ToolName[]).map((key) => {
         const t = TOOLS[key]
@@ -107,7 +116,7 @@ export class McpServer extends Effect.Service<McpServer>()('McpServer', {
         return textContent({ code: 'UnknownTool', tool: name }, true)
       }
 
-      const args = (req.params.arguments ?? {}) as Record<string, unknown>
+      const args = req.params.arguments ?? {}
       const exit = await Runtime.runPromiseExit(runtime)(handlers[name](args))
       return exitToContent(exit)
     })

@@ -1,9 +1,9 @@
-import { describe, expect, it } from 'bun:test'
 import { BearerToken } from '@parley/api/domain'
-import { Effect } from 'effect'
+import { describe, expect, it } from 'bun:test'
+import * as Effect from 'effect/Effect'
 import { parseServersToml, renderServersToml } from './ServersConfig'
 
-const run = <A, E>(eff: Effect.Effect<A, E, never>) => Effect.runPromise(eff)
+const run = <A, E>(eff: Effect.Effect<A, E>) => Effect.runPromise(eff)
 
 describe('ServersConfig TOML helpers', () => {
   it('parses servers.toml with Bun.TOML and validates the schema', async () => {

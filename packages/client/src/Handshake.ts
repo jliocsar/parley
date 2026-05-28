@@ -1,18 +1,19 @@
 import type { BearerToken, ReconnectToken, SessionId } from '@parley/api/domain'
 import { type HelloErrFrame, HelloErrFrame as HelloErrSchema, HelloOkFrame } from '@parley/api/wire'
-import { Effect, Option, Schema } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
+import * as Schema from 'effect/Schema'
 import { WsConnection } from './WsConnection'
 
 export const CLIENT_VERSION = '0.0.0'
 
 export type HelloResult =
   | {
-      readonly _tag: 'ok'
-      readonly sessionId: SessionId
-      readonly reconnectToken: ReconnectToken
-      readonly serverVersion: string
-    }
+    readonly _tag: 'ok'
+    readonly sessionId: SessionId
+    readonly reconnectToken: ReconnectToken
+    readonly serverVersion: string
+  }
   | { readonly _tag: 'err'; readonly frame: HelloErrFrame }
 
 const HelloResponseSchema = Schema.Union(HelloOkFrame, HelloErrSchema)
@@ -21,10 +22,10 @@ const decodeHelloResponse = Schema.decodeUnknown(HelloResponseSchema)
 export class Handshake extends Effect.Service<Handshake>()('Handshake', {
   accessors: true,
   dependencies: [WsConnection.Default],
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const ws = yield* WsConnection
 
-    const send = Effect.fn('Handshake.send')(function* (params: {
+    const send = Effect.fn('Handshake.send')(function*(params: {
       readonly authToken: Option.Option<BearerToken>
       readonly resume: Option.Option<{
         readonly sessionId: SessionId
@@ -39,7 +40,7 @@ export class Handshake extends Effect.Service<Handshake>()('Handshake', {
         ...(Option.isSome(params.resume) ? { resume: params.resume.value } : {}),
       })
 
-      while (true) {
+      for (;;) {
         const inbound = yield* ws.take()
 
         if (inbound._tag === 'closed') {

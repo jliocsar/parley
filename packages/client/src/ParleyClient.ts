@@ -17,8 +17,14 @@ import {
   type ToolOkRes,
   ToolRequestId,
 } from '@parley/api/wire'
-import { Deferred, Effect, MutableHashMap, Option, PubSub, Ref, Schema, Stream } from 'effect'
-
+import * as Deferred from 'effect/Deferred'
+import * as Effect from 'effect/Effect'
+import * as MutableHashMap from 'effect/MutableHashMap'
+import * as Option from 'effect/Option'
+import * as PubSub from 'effect/PubSub'
+import * as Ref from 'effect/Ref'
+import * as Schema from 'effect/Schema'
+import * as Stream from 'effect/Stream'
 import { Handshake } from './Handshake'
 import { WsConnection } from './WsConnection'
 
@@ -39,7 +45,7 @@ const decodeList = Schema.decodeUnknown(Tools.ListRooms.Result)
 const decodeSend = Schema.decodeUnknown(Tools.SendMessage.Result)
 const decodeWho = Schema.decodeUnknown(Tools.WhoIsHere.Result)
 
-type ClientState = {
+interface ClientState {
   readonly sessionId: SessionId
   readonly reconnectToken: ReconnectToken
   readonly url: string
@@ -54,7 +60,7 @@ const handshakeErrToError = (frame: HelloErrFrame) =>
 export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient', {
   accessors: true,
   dependencies: [WsConnection.Default, Handshake.Default],
-  scoped: Effect.gen(function* () {
+  scoped: Effect.gen(function*() {
     const ws = yield* WsConnection
     const handshake = yield* Handshake
 
@@ -67,7 +73,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       frame: F,
       finish: (def: Deferred.Deferred<ToolOkRes, ToolErrRes>, frame: F) => Effect.Effect<unknown>,
     ) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const def = MutableHashMap.get(pending, frame.requestId)
 
         if (Option.isSome(def)) {
@@ -77,7 +83,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       })
 
     const processInbound = (raw: unknown) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const decoded = yield* decodeServerFrame(raw).pipe(Effect.either)
 
         if (decoded._tag === 'Left') {
@@ -110,7 +116,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         }
       })
 
-    const reconnect = Effect.fn('ParleyClient.reconnect')(function* () {
+    const reconnect = Effect.fn('ParleyClient.reconnect')(function*() {
       const current = yield* Ref.get(state)
 
       if (Option.isNone(current)) {
@@ -149,8 +155,8 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       return true
     })
 
-    const pump: Effect.Effect<void, never, never> = Effect.gen(function* () {
-      while (true) {
+    const pump: Effect.Effect<void> = Effect.gen(function*() {
+      for (;;) {
         const inbound = yield* ws.take()
 
         if (inbound._tag === 'closed') {
@@ -174,9 +180,9 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
 
     const call = <A>(
       makeFrame: (requestId: ToolRequestId) => ClientFrame,
-      decode: (raw: unknown) => Effect.Effect<A, unknown, never>,
+      decode: (raw: unknown) => Effect.Effect<A, unknown>,
     ) =>
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const requestId = makeReqId()
         const def = yield* Deferred.make<ToolOkRes, ToolErrRes>()
         MutableHashMap.set(pending, requestId, def)
@@ -185,7 +191,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         return yield* decode(res.result)
       })
 
-    const connect = Effect.fn('ParleyClient.connect')(function* (params: {
+    const connect = Effect.fn('ParleyClient.connect')(function*(params: {
       readonly url: string
       readonly authToken: Option.Option<BearerToken>
     }) {
@@ -213,7 +219,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       yield* Effect.forkScoped(pump)
     })
 
-    const joinRoom = Effect.fn('ParleyClient.joinRoom')(function* (
+    const joinRoom = Effect.fn('ParleyClient.joinRoom')(function*(
       room: RoomName,
       nickname?: Nickname,
     ) {
@@ -226,15 +232,15 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       )
     })
 
-    const leaveRoom = Effect.fn('ParleyClient.leaveRoom')(function* (room: RoomName) {
+    const leaveRoom = Effect.fn('ParleyClient.leaveRoom')(function*(room: RoomName) {
       return yield* call((requestId) => ({ _tag: 'tool.leave_room', requestId, room }), decodeLeave)
     })
 
-    const listRooms = Effect.fn('ParleyClient.listRooms')(function* () {
+    const listRooms = Effect.fn('ParleyClient.listRooms')(function*() {
       return yield* call((requestId) => ({ _tag: 'tool.list_rooms', requestId }), decodeList)
     })
 
-    const sendMessage = Effect.fn('ParleyClient.sendMessage')(function* (
+    const sendMessage = Effect.fn('ParleyClient.sendMessage')(function*(
       room: RoomName,
       body: MessageBody,
     ) {
@@ -244,16 +250,16 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       )
     })
 
-    const whoIsHere = Effect.fn('ParleyClient.whoIsHere')(function* (room: RoomName) {
+    const whoIsHere = Effect.fn('ParleyClient.whoIsHere')(function*(room: RoomName) {
       return yield* call((requestId) => ({ _tag: 'tool.who_is_here', requestId, room }), decodeWho)
     })
 
-    const ack = Effect.fn('ParleyClient.ack')(function* (room: RoomName, seq: number) {
+    const ack = Effect.fn('ParleyClient.ack')(function*(room: RoomName, seq: number) {
       yield* ws.send({ _tag: 'ack', room, seq })
       lastAckedSeqByRoom.set(room, seq)
     })
 
-    const sessionInfo = Effect.fn('ParleyClient.sessionInfo')(function* () {
+    const sessionInfo = Effect.fn('ParleyClient.sessionInfo')(function*() {
       const s = yield* Ref.get(state)
       return Option.map(s, (c) => ({
         sessionId: c.sessionId,

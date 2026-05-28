@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'bun:test'
+import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
+import * as Config from 'effect/Config'
+import * as ConfigProvider from 'effect/ConfigProvider'
+import * as Effect from 'effect/Effect'
+import * as Layer from 'effect/Layer'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { migrate } from 'drizzle-orm/bun-sqlite/migrator'
-import { Config, ConfigProvider, Effect, Layer } from 'effect'
 
 import { ServerConfig } from '../config'
 import { RoomName } from '../domain/room'
@@ -26,7 +29,7 @@ const withTempDb = <A>(eff: Effect.Effect<A, unknown, RoomRepo | Db>) => {
     ),
   )
 
-  const program = Effect.gen(function* () {
+  const program = Effect.gen(function*() {
     const db = yield* Db
     yield* Effect.promise(() =>
       Promise.resolve(
@@ -34,7 +37,7 @@ const withTempDb = <A>(eff: Effect.Effect<A, unknown, RoomRepo | Db>) => {
           migrationsFolder: MIGRATIONS,
           migrationsTable: '__drizzle_migrations',
         }),
-      ),
+      )
     )
     return yield* eff
   })
@@ -46,7 +49,9 @@ const withTempDb = <A>(eff: Effect.Effect<A, unknown, RoomRepo | Db>) => {
       Effect.provide(ConfigLive),
       Effect.scoped,
     ),
-  ).finally(() => rmSync(dir, { recursive: true, force: true }))
+  ).finally(() => {
+    rmSync(dir, { recursive: true, force: true })
+  })
 }
 
 // Avoid unused import warning — ServerConfig is what the layer reads via ConfigProvider.
@@ -59,7 +64,7 @@ describe('RoomRepo.ensure', () => {
   // `findByName` after a successful insert blows up with "Expected string, actual <Date>".
   it('round-trips a room through the DB without DateTimeUtc decode errors', async () => {
     await withTempDb(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const repo = yield* RoomRepo
         const name = RoomName.make('lobby')
 

@@ -1,10 +1,16 @@
 #!/usr/bin/env sh
-# Run Biome on staged files only. --write applies safe + --unsafe fixes
-# in place; we then re-stage so the fixes ship in this commit.
-# If Biome can't auto-fix everything, it exits non-zero and blocks the commit.
+# Run ESLint --fix on staged TS files only. The dprint formatter runs as
+# an ESLint rule, so --fix handles both formatting and lint-fixable rules.
+# If something can't auto-fix, ESLint exits non-zero and blocks the commit.
 
-bunx biome check --staged --write --unsafe --no-errors-on-unmatched --files-ignore-unknown=true || exit 1
+staged=$(git diff --cached --name-only --diff-filter=ACMR | grep -E '\.(ts|tsx|mjs|cjs)$' || true)
 
-# Re-stage files that biome modified (they were already staged; --again
-# picks up unstaged modifications to already-tracked, already-staged paths).
-git update-index --again
+if [ -n "$staged" ]; then
+  printf '%s\n' "$staged" | xargs bunx eslint --fix --no-warn-ignored || exit 1
+  # Re-stage files that ESLint modified.
+  git update-index --again
+fi
+
+# Typecheck every workspace package with tsc. Whole-project, can't scope to
+# staged files, so it runs in full and blocks the commit on any type error.
+bun run typecheck || exit 1

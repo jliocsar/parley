@@ -1,5 +1,7 @@
-import { Effect, MutableHashMap, Option, Schema } from 'effect'
-
+import * as Effect from 'effect/Effect'
+import * as MutableHashMap from 'effect/MutableHashMap'
+import * as Option from 'effect/Option'
+import * as Schema from 'effect/Schema'
 import type { SessionId } from '../domain/ids'
 import type { RoomName } from '../domain/room'
 import { ReplayBufferOverflowError } from '../errors/handshake'
@@ -11,7 +13,7 @@ const encodeRoomMessage = Schema.encodeSync(RoomMessageEvent)
 
 const REPLAY_BUFFER_SIZE = 64
 
-type RecipientBuffer = {
+interface RecipientBuffer {
   readonly perRoom: Map<RoomName, RoomMessageEvent[]>
   readonly lastAckedSeqByRoom: Map<RoomName, number>
 }
@@ -21,7 +23,7 @@ const emptyBuffer = (): RecipientBuffer => ({ perRoom: new Map(), lastAckedSeqBy
 export class FanoutService extends Effect.Service<FanoutService>()('FanoutService', {
   accessors: true,
   dependencies: [MembershipRegistry.Default, SessionRegistry.Default],
-  effect: Effect.gen(function* () {
+  effect: Effect.gen(function*() {
     const memberships = yield* MembershipRegistry
     const sessions = yield* SessionRegistry
 
@@ -59,7 +61,7 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         return next
       }).pipe(Effect.withSpan('FanoutService.nextSeqFor'))
 
-    const enqueueAndPush = Effect.fn('FanoutService.enqueueAndPush')(function* (
+    const enqueueAndPush = Effect.fn('FanoutService.enqueueAndPush')(function*(
       room: RoomName,
       event: RoomMessageEvent,
       senderSessionId?: SessionId,
@@ -73,7 +75,9 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
       yield* Effect.forEach(
         recipients,
         ({ sessionId }) =>
-          Effect.sync(() => appendToBuffer(sessionId, room, event)).pipe(
+          Effect.sync(() => {
+            appendToBuffer(sessionId, room, event)
+          }).pipe(
             Effect.zipRight(sessions.sendTo(sessionId, payload)),
           ),
         { concurrency: 16, discard: true },
@@ -119,7 +123,7 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
       return Effect.succeed(queue.filter((e) => e.seq > clientLastSeq))
     }
 
-    const replay = Effect.fn('FanoutService.replay')(function* (
+    const replay = Effect.fn('FanoutService.replay')(function*(
       sessionId: SessionId,
       lastAckedSeqByRoom: Record<string, number>,
     ) {
@@ -129,8 +133,9 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         return [] as RoomMessageEvent[]
       }
 
-      const groups = yield* Effect.forEach(Array.from(buf.value.perRoom), ([room, queue]) =>
-        replayRoom(room, queue, lastAckedSeqByRoom[room as string] ?? 0),
+      const groups = yield* Effect.forEach(
+        Array.from(buf.value.perRoom),
+        ([room, queue]) => replayRoom(room, queue, lastAckedSeqByRoom[room as string] ?? 0),
       )
 
       return groups.flat()

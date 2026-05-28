@@ -1,7 +1,7 @@
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 
-import { Effect } from 'effect'
+import * as Effect from 'effect/Effect'
 
 const DEFAULT_SERVERS_CONFIG_PATH = join(homedir(), '.config', 'parley', 'servers.toml')
 
@@ -11,13 +11,13 @@ const isLoopback = (bind: string) =>
 export const renderLocalServersToml = (url: string) =>
   ['default = "local"', '', '[servers.local]', `url = ${JSON.stringify(url)}`, ''].join('\n')
 
-export type EnsureLocalServerEntryParams = {
+export interface EnsureLocalServerEntryParams {
   readonly bind: string
   readonly port: number
   readonly path?: string
 }
 
-export const ensureLocalServerEntry = Effect.fn('ensureLocalServerEntry')(function* (
+export const ensureLocalServerEntry = Effect.fn('ensureLocalServerEntry')(function*(
   params: EnsureLocalServerEntryParams,
 ) {
   if (!isLoopback(params.bind)) {

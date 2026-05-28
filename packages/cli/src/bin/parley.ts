@@ -1,8 +1,9 @@
 #!/usr/bin/env bun
-import { Command } from '@effect/cli'
-import { BunContext, BunRuntime } from '@effect/platform-bun'
-import { Effect, Layer } from 'effect'
-
+import * as Command from '@effect/cli/Command'
+import * as BunContext from '@effect/platform-bun/BunContext'
+import * as BunRuntime from '@effect/platform-bun/BunRuntime'
+import * as Effect from 'effect/Effect'
+import * as Layer from 'effect/Layer'
 import pkg from '../../package.json' with { type: 'comptime+json' }
 import { mcp } from '../commands/mcp'
 import { servers } from '../commands/servers'

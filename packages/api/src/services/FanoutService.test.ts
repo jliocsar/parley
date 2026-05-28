@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'bun:test'
-import { DateTime, Effect, Layer, Option } from 'effect'
-
+import * as DateTime from 'effect/DateTime'
+import * as Effect from 'effect/Effect'
+import * as Layer from 'effect/Layer'
+import * as Option from 'effect/Option'
 import { MessageId, ReconnectToken, SessionId } from '../domain/ids'
 import { MessageBody } from '../domain/message'
 import { Nickname } from '../domain/nickname'
@@ -49,7 +51,7 @@ const run = <A>(
 describe('FanoutService.enqueueAndPush', () => {
   it('omits the sender from fanout when a senderSessionId is provided', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const memberships = yield* MembershipRegistry
         const sessions = yield* SessionRegistry
         const fanout = yield* FanoutService
@@ -74,7 +76,7 @@ describe('FanoutService.enqueueAndPush', () => {
 
   it('still broadcasts to every member when no senderSessionId is given', async () => {
     await run(
-      Effect.gen(function* () {
+      Effect.gen(function*() {
         const memberships = yield* MembershipRegistry
         const sessions = yield* SessionRegistry
         const fanout = yield* FanoutService
