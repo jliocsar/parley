@@ -1,4 +1,5 @@
 import type { ServerWebSocket } from 'bun'
+import * as Clock from 'effect/Clock'
 import * as Effect from 'effect/Effect'
 import * as Fiber from 'effect/Fiber'
 import * as Option from 'effect/Option'
@@ -21,6 +22,7 @@ import {
   type RoomMessageEvent,
   ServerFrame,
   type SystemErrorEvent,
+  type ToolErrorCode,
   type ToolErrRes,
   type ToolOkRes,
 } from '../wire/server'
@@ -125,7 +127,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     const sendToolErr = (
       ws: ServerWebSocket<WsData>,
       requestId: ToolRequestId,
-      code: string,
+      code: ToolErrorCode,
       message: string,
       details?: unknown,
     ) => sendServerFrame(ws, { _tag: 'tool.err', requestId, code, message, details })
@@ -210,12 +212,13 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         const label = yield* runAuth(hello.authToken)
         const reconnectToken = yield* cryptoSvc.issueReconnectToken()
         const sessionId = ws.data.sessionId
+        const connectedAt = yield* Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms))
 
         yield* sessions.register({
           id: sessionId,
           authLabel: label,
           clientVersion: hello.clientVersion,
-          connectedAt: new Date(),
+          connectedAt,
           reconnectToken,
           socket: Option.some(ws),
         })

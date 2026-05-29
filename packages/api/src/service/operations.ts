@@ -1,9 +1,9 @@
 import { mkdir, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
-import * as Data from 'effect/Data'
 import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
+import * as Schema from 'effect/Schema'
 
 import { ServerConfig } from '../config'
 import {
@@ -19,9 +19,21 @@ import {
 import { detectPlatform, type Platform } from './platform'
 import { renderEnvFile, renderLaunchdPlist, renderSystemdUnit } from './templates'
 
-export class ServiceCommandError extends Data.TaggedError('ServiceCommandError')<{
-  readonly message: string
-}> {}
+export class ServiceCommandError extends Schema.TaggedError<ServiceCommandError>()(
+  'ServiceCommandError',
+  {
+    message: Schema.String,
+  },
+) {}
+
+class FileRemoveError extends Schema.TaggedError<FileRemoveError>()(
+  'FileRemoveError',
+  {
+    path: Schema.String,
+    detail: Schema.String,
+    alreadyGone: Schema.Boolean,
+  },
+) {}
 
 const resolveBinaryPath = Effect.fn('resolveBinaryPath')(function*() {
   const argv0 = process.argv[0]
@@ -63,17 +75,17 @@ export const isFileNotFound = (e: unknown): boolean =>
 const removeFile = (path: string) =>
   Effect.tryPromise({
     try: () => unlink(path),
-    catch: (e) => ({ e, alreadyGone: isFileNotFound(e) }),
+    catch: (e) =>
+      new FileRemoveError({
+        path,
+        detail: e instanceof Error ? e.message : String(e),
+        alreadyGone: isFileNotFound(e),
+      }),
   }).pipe(
-    Effect.catchAll(({ e, alreadyGone }) => {
-      if (alreadyGone) {
-        return Effect.void
-      }
-
-      const detail = e instanceof Error ? e.message : String(e)
-
-      return Effect.logWarning(`Could not remove ${path}: ${detail}`)
-    }),
+    Effect.catchTag('FileRemoveError', (err) =>
+      err.alreadyGone
+        ? Effect.void
+        : Effect.logWarning(`Could not remove ${err.path}: ${err.detail}`)),
   )
 
 const ensureEnvFile = Effect.fn('ensureEnvFile')(function*() {

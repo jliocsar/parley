@@ -10,6 +10,7 @@ export type DbClient = Database
 
 export class DbError extends Schema.TaggedError<DbError>()('DbError', {
   message: Schema.String,
+  cause: Schema.optional(Schema.String),
 }) {}
 
 export class Db extends Effect.Service<Db>()('Db', {
@@ -36,7 +37,10 @@ export class Db extends Effect.Service<Db>()('Db', {
       Effect.tryPromise({
         try: () => f(handle),
         catch: (cause) =>
-          new DbError({ message: cause instanceof Error ? cause.message : String(cause) }),
+          new DbError({
+            message: cause instanceof Error ? cause.message : String(cause),
+            cause: cause instanceof Error ? cause.name : undefined,
+          }),
       })
 
     return { handle, client, run }

@@ -64,10 +64,7 @@ export class ServersConfig extends Effect.Service<ServersConfig>()('ServersConfi
     const resolve = Effect.fn('ServersConfig.resolve')(function*(name: Option.Option<string>) {
       const cfg = yield* read()
 
-      const chosen = Option.match(name, {
-        onNone: () => cfg.default ?? LOCAL_SERVER_NAME,
-        onSome: (n) => n,
-      })
+      const chosen = Option.getOrElse(name, () => cfg.default ?? LOCAL_SERVER_NAME)
 
       const entry = cfg.servers[chosen]
 

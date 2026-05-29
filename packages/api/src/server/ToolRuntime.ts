@@ -21,7 +21,7 @@ import type {
   SendMessageReq,
   WhoIsHereReq,
 } from '../wire/client'
-import type { ToolErrRes, ToolOkRes } from '../wire/server'
+import type { ToolErrorCode, ToolErrRes, ToolOkRes } from '../wire/server'
 
 const MAX_NICKNAME_ATTEMPTS = 8
 
@@ -61,7 +61,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
 
     const err = (
       requestId: ToolErrRes['requestId'],
-      code: string,
+      code: ToolErrorCode,
       message: string,
       details?: unknown,
     ): ToolErrRes => ({ _tag: 'tool.err', requestId, code, message, details })
@@ -181,7 +181,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
       }
 
       const messageId = yield* cryptoSvc.issueMessageId()
-      const sentAt = DateTime.unsafeNow()
+      const sentAt = yield* DateTime.now
 
       const event = yield* fanout.publish(
         req.room,

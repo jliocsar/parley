@@ -60,14 +60,14 @@ export class WsConnection extends Effect.Service<WsConnection>()('WsConnection',
       ws.onmessage = (ev) => {
         try {
           const parsed = JSON.parse(String(ev.data)) as unknown
-          void inbox.unsafeOffer({ _tag: 'raw', value: parsed })
+          fork(Queue.offer(inbox, { _tag: 'raw', value: parsed }))
         } catch {
           /* malformed frame — surfaced upstream as protocol error */
         }
       }
 
       ws.onclose = () => {
-        void inbox.unsafeOffer({ _tag: 'closed' })
+        fork(Queue.offer(inbox, { _tag: 'closed' }))
       }
 
       yield* Ref.set(socket, Option.some(ws))

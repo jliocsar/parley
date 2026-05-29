@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import * as Clock from 'effect/Clock'
 import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
@@ -40,7 +41,7 @@ export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
     const findByHash = findFirstBy(authTokens.tokenHash)
 
     const insert = Effect.fn('TokenRepo.insert')(function*(label: AuthLabel, tokenHash: string) {
-      const createdAt = new Date()
+      const createdAt = yield* Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms))
       yield* db.run((h) => h.insert(authTokens).values({ label, tokenHash, createdAt }))
       return createdAt
     })
@@ -50,8 +51,9 @@ export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
     })
 
     const touchLastUsed = Effect.fn('TokenRepo.touchLastUsed')(function*(label: AuthLabel) {
+      const lastUsedAt = yield* Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms))
       yield* db.run((h) =>
-        h.update(authTokens).set({ lastUsedAt: new Date() }).where(eq(authTokens.label, label))
+        h.update(authTokens).set({ lastUsedAt }).where(eq(authTokens.label, label))
       )
     })
 

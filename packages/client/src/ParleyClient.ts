@@ -10,6 +10,7 @@ import { type ToolName, TOOLS } from '@parley/api/tools'
 import {
   ClientFrame,
   type HelloErrFrame,
+  HelloErrorCode,
   type RoomMessageEvent,
   ServerFrame,
   type SystemErrorEvent,
@@ -22,6 +23,7 @@ import * as Effect from 'effect/Effect'
 import * as Exit from 'effect/Exit'
 import * as MutableHashMap from 'effect/MutableHashMap'
 import * as Option from 'effect/Option'
+import type { ParseError } from 'effect/ParseResult'
 import * as PubSub from 'effect/PubSub'
 import * as Ref from 'effect/Ref'
 import * as Schema from 'effect/Schema'
@@ -34,7 +36,7 @@ export type ParleyEvent = RoomMessageEvent | SystemErrorEvent
 export class HandshakeFailedError extends Schema.TaggedError<HandshakeFailedError>()(
   'HandshakeFailedError',
   {
-    code: Schema.String,
+    code: HelloErrorCode,
     message: Schema.String,
   },
 ) {}
@@ -200,7 +202,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
     const call = <N extends ToolName>(
       toolName: N,
       makeFrame: (requestId: ToolRequestId) => ClientFrame,
-    ): Effect.Effect<ToolResult<N>, unknown> =>
+    ): Effect.Effect<ToolResult<N>, ToolErrRes | ParseError> =>
       Effect.gen(function*() {
         const requestId = makeReqId()
         const def = yield* Deferred.make<ToolOkRes, ToolErrRes>()
@@ -209,7 +211,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         const res = yield* Deferred.await(def)
         const decode = resultDecoders[toolName] as (
           raw: unknown,
-        ) => Effect.Effect<ToolResult<N>, unknown>
+        ) => Effect.Effect<ToolResult<N>, ParseError>
 
         return yield* decode(res.result)
       })
@@ -226,7 +228,7 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       })
 
       if (result._tag === 'err') {
-        return yield* Effect.fail(handshakeErrToError(result.frame))
+        return yield* handshakeErrToError(result.frame)
       }
 
       yield* Ref.set(

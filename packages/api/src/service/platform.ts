@@ -1,10 +1,13 @@
-import * as Data from 'effect/Data'
 import * as Effect from 'effect/Effect'
+import * as Schema from 'effect/Schema'
 export type Platform = 'systemd' | 'launchd'
 
-export class UnsupportedPlatformError extends Data.TaggedError('UnsupportedPlatformError')<{
-  readonly message: string
-}> {}
+export class UnsupportedPlatformError extends Schema.TaggedError<UnsupportedPlatformError>()(
+  'UnsupportedPlatformError',
+  {
+    message: Schema.String,
+  },
+) {}
 
 export const detectPlatform = Effect.fn('detectPlatform')(function*() {
   if (process.platform === 'darwin') {

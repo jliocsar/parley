@@ -1,4 +1,5 @@
 import { eq } from 'drizzle-orm'
+import * as Clock from 'effect/Clock'
 import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
@@ -35,11 +36,12 @@ export class RoomRepo extends Effect.Service<RoomRepo>()('RoomRepo', {
       }
 
       const id = yield* crypto.issueRoomId()
+      const createdAt = yield* Effect.map(Clock.currentTimeMillis, (ms) => new Date(ms))
 
       yield* db.run((h) =>
         h
           .insert(rooms)
-          .values({ id, name, createdAt: new Date() })
+          .values({ id, name, createdAt })
           .onConflictDoNothing()
       )
 

@@ -1,3 +1,4 @@
+import * as Clock from 'effect/Clock'
 import * as Effect from 'effect/Effect'
 import * as MutableHashMap from 'effect/MutableHashMap'
 import * as Option from 'effect/Option'
@@ -19,24 +20,26 @@ export class RateLimiter extends Effect.Service<RateLimiter>()('RateLimiter', {
     const store = MutableHashMap.empty<SessionId, Bucket>()
 
     const tryConsume = (id: SessionId) =>
-      Effect.sync((): ConsumeResult => {
-        const now = Date.now()
-        const bucket = Option.getOrElse(MutableHashMap.get(store, id), () => ({
-          tokens: CAPACITY,
-          lastRefillMs: now,
-        }))
+      Clock.currentTimeMillis.pipe(
+        Effect.map((now): ConsumeResult => {
+          const bucket = Option.getOrElse(MutableHashMap.get(store, id), () => ({
+            tokens: CAPACITY,
+            lastRefillMs: now,
+          }))
 
-        const elapsed = (now - bucket.lastRefillMs) / 1000
-        const refilled = Math.min(CAPACITY, bucket.tokens + elapsed * REFILL_PER_SECOND)
+          const elapsed = (now - bucket.lastRefillMs) / 1000
+          const refilled = Math.min(CAPACITY, bucket.tokens + elapsed * REFILL_PER_SECOND)
 
-        if (refilled < 1) {
-          const retryAfterMs = Math.ceil(((1 - refilled) / REFILL_PER_SECOND) * 1000)
-          return { ok: false, retryAfterMs }
-        }
+          if (refilled < 1) {
+            const retryAfterMs = Math.ceil(((1 - refilled) / REFILL_PER_SECOND) * 1000)
+            return { ok: false, retryAfterMs }
+          }
 
-        MutableHashMap.set(store, id, { tokens: refilled - 1, lastRefillMs: now })
-        return { ok: true }
-      }).pipe(Effect.withSpan('RateLimiter.tryConsume'))
+          MutableHashMap.set(store, id, { tokens: refilled - 1, lastRefillMs: now })
+          return { ok: true }
+        }),
+        Effect.withSpan('RateLimiter.tryConsume'),
+      )
 
     const dropSession = (id: SessionId) =>
       Effect.sync(() => MutableHashMap.remove(store, id)).pipe(
