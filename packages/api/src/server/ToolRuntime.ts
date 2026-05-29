@@ -3,7 +3,6 @@ import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
 import type { SessionId } from '../domain/ids'
-import { MESSAGE_BODY_MAX_BYTES } from '../domain/message'
 import type { Nickname } from '../domain/nickname'
 import type { RoomName } from '../domain/room'
 import { CryptoService } from '../services/Crypto'
@@ -22,15 +21,19 @@ import type {
   SendMessageReq,
   WhoIsHereReq,
 } from '../wire/client'
-import type { RoomMessageEvent, ToolErrRes, ToolOkRes } from '../wire/server'
+import type { ToolErrRes, ToolOkRes } from '../wire/server'
 
 const MAX_NICKNAME_ATTEMPTS = 8
 
-const encodeJoinResult = Schema.encodeSync(TOOLS.join_room.result)
-const encodeLeaveResult = Schema.encodeSync(TOOLS.leave_room.result)
-const encodeListResult = Schema.encodeSync(TOOLS.list_rooms.result)
-const encodeSendResult = Schema.encodeSync(TOOLS.send_message.result)
-const encodeWhoResult = Schema.encodeSync(TOOLS.who_is_here.result)
+// Per-tool result encoders keyed by the registry name — the encode-side mirror of the
+// client's resultDecoders. Adding a tool is a registry edit, not another loose const here.
+const encodeResult = {
+  join_room: Schema.encodeSync(TOOLS.join_room.result),
+  leave_room: Schema.encodeSync(TOOLS.leave_room.result),
+  list_rooms: Schema.encodeSync(TOOLS.list_rooms.result),
+  send_message: Schema.encodeSync(TOOLS.send_message.result),
+  who_is_here: Schema.encodeSync(TOOLS.who_is_here.result),
+} as const
 
 export type ToolRuntimeResult = ToolOkRes | ToolErrRes | undefined
 
@@ -99,7 +102,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
         const membersCount = yield* memberships.memberCount(req.room)
         return ok(
           req.requestId,
-          encodeJoinResult({ room: req.room, nickname: req.nickname, membersCount }),
+          encodeResult.join_room({ room: req.room, nickname: req.nickname, membersCount }),
         )
       }
 
@@ -116,7 +119,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
       const membersCount = yield* memberships.memberCount(req.room)
       return ok(
         req.requestId,
-        encodeJoinResult({
+        encodeResult.join_room({
           room: req.room,
           nickname: allocated.value,
           membersCount,
@@ -129,7 +132,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
       req: LeaveRoomReq,
     ) {
       yield* memberships.leave(req.room, sessionId)
-      return ok(req.requestId, encodeLeaveResult({ room: req.room }))
+      return ok(req.requestId, encodeResult.leave_room({ room: req.room }))
     })
 
     const listRooms = Effect.fn('ToolRuntime.listRooms')(function*(
@@ -150,7 +153,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
         }
       }
 
-      return ok(req.requestId, encodeListResult({ joined, available }))
+      return ok(req.requestId, encodeResult.list_rooms({ joined, available }))
     })
 
     const sendMessage = Effect.fn('ToolRuntime.sendMessage')(function*(
@@ -168,16 +171,8 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
         )
       }
 
-      const bytes = new TextEncoder().encode(req.body).byteLength
-
-      if (bytes > MESSAGE_BODY_MAX_BYTES) {
-        return err(
-          req.requestId,
-          'MessageTooLargeError',
-          `Message too large: ${bytes} bytes (max ${MESSAGE_BODY_MAX_BYTES})`,
-        )
-      }
-
+      // Body size (≤ MESSAGE_BODY_MAX_BYTES) is enforced by the MessageBody schema during
+      // ClientFrame decode, so an oversized body never reaches this handler.
       const members = yield* memberships.membersOf(req.room)
       const me = members.find((m) => m.sessionId === sessionId)
 
@@ -185,22 +180,19 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
         return err(req.requestId, 'NotInRoomError', `Not joined to room ${req.room}`)
       }
 
-      const seq = yield* fanout.nextSeqFor(req.room)
       const messageId = yield* cryptoSvc.issueMessageId()
       const sentAt = DateTime.unsafeNow()
 
-      const event: RoomMessageEvent = {
-        _tag: 'room.message',
-        room: req.room,
-        seq,
-        messageId,
-        fromNickname: me.nickname,
-        body: req.body,
-        sentAt,
-      }
+      const event = yield* fanout.publish(
+        req.room,
+        { messageId, fromNickname: me.nickname, body: req.body, sentAt },
+        sessionId,
+      )
 
-      yield* fanout.enqueueAndPush(req.room, event, sessionId)
-      return ok(req.requestId, encodeSendResult({ room: req.room, seq, messageId, sentAt }))
+      return ok(
+        req.requestId,
+        encodeResult.send_message({ room: req.room, seq: event.seq, messageId, sentAt }),
+      )
     })
 
     const whoIsHere = Effect.fn('ToolRuntime.whoIsHere')(function*(
@@ -210,7 +202,7 @@ export class ToolRuntime extends Effect.Service<ToolRuntime>()('ToolRuntime', {
       const members = yield* memberships.membersOf(req.room)
       return ok(
         req.requestId,
-        encodeWhoResult({ room: req.room, nicknames: members.map((m) => m.nickname) }),
+        encodeResult.who_is_here({ room: req.room, nicknames: members.map((m) => m.nickname) }),
       )
     })
 

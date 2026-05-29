@@ -64,16 +64,25 @@ export class SessionRegistry extends Effect.Service<SessionRegistry>()('SessionR
       )
 
     const sendTo = (id: SessionId, payload: string) =>
-      Effect.sync(() => {
+      Effect.suspend(() => {
         const session = MutableHashMap.get(store, id)
 
         if (Option.isNone(session) || Option.isNone(session.value.socket)) {
-          return
+          return Effect.void
         }
 
-        try {
-          session.value.socket.value.send(payload)
-        } catch {}
+        const socket = session.value.socket.value
+
+        return Effect.try(() => socket.send(payload)).pipe(
+          // A throwing send means the socket is dead; detach it so fanout stops
+          // retrying a corpse, and surface it instead of swallowing silently.
+          Effect.catchTag('UnknownException', () =>
+            Effect.logDebug('detaching dead socket after failed send').pipe(
+              Effect.zipRight(Effect.sync(() => {
+                updateSocket(id, Option.none())
+              })),
+            )),
+        )
       }).pipe(Effect.withSpan('SessionRegistry.sendTo'))
 
     return { register, get, attachSocket, detachSocket, remove, list, sendTo }

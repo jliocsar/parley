@@ -1,6 +1,10 @@
 import * as Command from '@effect/cli/Command'
 import * as Options from '@effect/cli/Options'
+import * as Schema from 'effect/Schema'
+
 import * as ops from './operations'
+
+const PositiveInt = Schema.Number.pipe(Schema.int(), Schema.positive())
 
 const purgeOption = Options.boolean('purge').pipe(
   Options.withDescription('Also remove ~/.config/parley/server.env (never touches the DB).'),
@@ -15,7 +19,10 @@ const followOption = Options.boolean('follow').pipe(
 const linesOption = Options.integer('lines').pipe(
   Options.withAlias('n'),
   Options.withDefault(200),
-  Options.withDescription('Number of log lines to show before tailing.'),
+  Options.withSchema(PositiveInt),
+  Options.withDescription(
+    'Number of log lines to show before tailing (must be a positive integer).',
+  ),
 )
 
 const installCmd = Command.make('install', {}, () => ops.install())

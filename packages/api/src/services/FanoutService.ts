@@ -1,24 +1,38 @@
+import type * as DateTime from 'effect/DateTime'
 import * as Effect from 'effect/Effect'
 import * as MutableHashMap from 'effect/MutableHashMap'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
-import type { SessionId } from '../domain/ids'
+import type { MessageId, SessionId } from '../domain/ids'
+import type { MessageBody } from '../domain/message'
+import type { Nickname } from '../domain/nickname'
 import type { RoomName } from '../domain/room'
 import { ReplayBufferOverflowError } from '../errors/handshake'
 import { RoomMessageEvent } from '../wire/server'
 import { MembershipRegistry } from './MembershipRegistry'
 import { SessionRegistry } from './SessionRegistry'
 
-const encodeRoomMessage = Schema.encodeSync(RoomMessageEvent)
+const encodeRoomMessageJson = Schema.encodeSync(Schema.parseJson(RoomMessageEvent))
 
 const REPLAY_BUFFER_SIZE = 64
 
-interface RecipientBuffer {
-  readonly perRoom: Map<RoomName, RoomMessageEvent[]>
-  readonly lastAckedSeqByRoom: Map<RoomName, number>
+export interface MessageDraft {
+  readonly messageId: MessageId
+  readonly fromNickname: Nickname
+  readonly body: MessageBody
+  readonly sentAt: DateTime.Utc
 }
 
-const emptyBuffer = (): RecipientBuffer => ({ perRoom: new Map(), lastAckedSeqByRoom: new Map() })
+interface RoomBuffer {
+  readonly events: RoomMessageEvent[]
+  highestEvictedSeq: number
+}
+
+interface RecipientBuffer {
+  readonly perRoom: Map<RoomName, RoomBuffer>
+}
+
+const emptyBuffer = (): RecipientBuffer => ({ perRoom: new Map() })
 
 export class FanoutService extends Effect.Service<FanoutService>()('FanoutService', {
   accessors: true,
@@ -29,6 +43,12 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
 
     const roomSeqs = MutableHashMap.empty<RoomName, number>()
     const buffers = MutableHashMap.empty<SessionId, RecipientBuffer>()
+
+    const assignSeq = (room: RoomName): number => {
+      const next = Option.getOrElse(MutableHashMap.get(roomSeqs, room), () => 1)
+      MutableHashMap.set(roomSeqs, room, next + 1)
+      return next
+    }
 
     const getOrInitBuffer = (sessionId: SessionId): RecipientBuffer => {
       const existing = MutableHashMap.get(buffers, sessionId)
@@ -42,46 +62,67 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
       return fresh
     }
 
-    const appendToBuffer = (sessionId: SessionId, room: RoomName, event: RoomMessageEvent) => {
+    const getOrInitRoomBuffer = (sessionId: SessionId, room: RoomName): RoomBuffer => {
       const buf = getOrInitBuffer(sessionId)
-      const queue = buf.perRoom.get(room) ?? []
-      queue.push(event)
+      const existing = buf.perRoom.get(room)
 
-      if (queue.length > REPLAY_BUFFER_SIZE) {
-        queue.splice(0, queue.length - REPLAY_BUFFER_SIZE)
+      if (existing !== undefined) {
+        return existing
       }
 
-      buf.perRoom.set(room, queue)
+      const fresh: RoomBuffer = { events: [], highestEvictedSeq: 0 }
+      buf.perRoom.set(room, fresh)
+      return fresh
     }
 
-    const nextSeqFor = (room: RoomName) =>
-      Effect.sync(() => {
-        const next = Option.getOrElse(MutableHashMap.get(roomSeqs, room), () => 1)
-        MutableHashMap.set(roomSeqs, room, next + 1)
-        return next
-      }).pipe(Effect.withSpan('FanoutService.nextSeqFor'))
+    const appendToBuffer = (sessionId: SessionId, room: RoomName, event: RoomMessageEvent) => {
+      const roomBuffer = getOrInitRoomBuffer(sessionId, room)
+      roomBuffer.events.push(event)
 
-    const enqueueAndPush = Effect.fn('FanoutService.enqueueAndPush')(function*(
+      if (roomBuffer.events.length > REPLAY_BUFFER_SIZE) {
+        const evicted = roomBuffer.events.splice(0, roomBuffer.events.length - REPLAY_BUFFER_SIZE)
+        const lastEvicted = evicted[evicted.length - 1]
+
+        if (lastEvicted !== undefined) {
+          roomBuffer.highestEvictedSeq = lastEvicted.seq
+        }
+      }
+    }
+
+    const publish = Effect.fn('FanoutService.publish')(function*(
       room: RoomName,
-      event: RoomMessageEvent,
-      senderSessionId?: SessionId,
+      draft: MessageDraft,
+      senderSessionId: SessionId,
     ) {
-      const allRecipients = yield* memberships.membersOf(room)
-      const recipients = senderSessionId
-        ? allRecipients.filter((m) => m.sessionId !== senderSessionId)
-        : allRecipients
-      const payload = JSON.stringify(encodeRoomMessage(event))
+      const members = yield* memberships.membersOf(room)
+      const recipients = members.filter((member) => member.sessionId !== senderSessionId)
 
-      yield* Effect.forEach(
-        recipients,
-        ({ sessionId }) =>
-          Effect.sync(() => {
-            appendToBuffer(sessionId, room, event)
-          }).pipe(
-            Effect.zipRight(sessions.sendTo(sessionId, payload)),
-          ),
-        { concurrency: 16, discard: true },
-      )
+      const { event, payload } = yield* Effect.sync(() => {
+        const seq = assignSeq(room)
+        const built: RoomMessageEvent = {
+          _tag: 'room.message',
+          room,
+          seq,
+          messageId: draft.messageId,
+          fromNickname: draft.fromNickname,
+          body: draft.body,
+          sentAt: draft.sentAt,
+        }
+        const encoded = encodeRoomMessageJson(built)
+
+        for (const { sessionId } of recipients) {
+          appendToBuffer(sessionId, room, built)
+        }
+
+        return { event: built, payload: encoded }
+      })
+
+      yield* Effect.forEach(recipients, ({ sessionId }) => sessions.sendTo(sessionId, payload), {
+        concurrency: 16,
+        discard: true,
+      })
+
+      return event
     })
 
     const ackUpTo = (sessionId: SessionId, room: RoomName, seq: number) =>
@@ -92,26 +133,21 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
           return
         }
 
-        const queue = buf.value.perRoom.get(room)
+        const roomBuffer = buf.value.perRoom.get(room)
 
-        if (queue) {
-          buf.value.perRoom.set(
-            room,
-            queue.filter((e) => e.seq > seq),
-          )
+        if (roomBuffer !== undefined) {
+          const retained = roomBuffer.events.filter((event) => event.seq > seq)
+          roomBuffer.events.length = 0
+          roomBuffer.events.push(...retained)
         }
-
-        buf.value.lastAckedSeqByRoom.set(room, seq)
       }).pipe(Effect.withSpan('FanoutService.ackUpTo'))
 
     const replayRoom = (
       room: RoomName,
-      queue: readonly RoomMessageEvent[],
+      roomBuffer: RoomBuffer,
       clientLastSeq: number,
     ): Effect.Effect<readonly RoomMessageEvent[], ReplayBufferOverflowError> => {
-      const oldestBuffered = queue[0]?.seq ?? clientLastSeq + 1
-
-      if (oldestBuffered > clientLastSeq + 1) {
+      if (roomBuffer.highestEvictedSeq > clientLastSeq) {
         return Effect.fail(
           new ReplayBufferOverflowError({
             room,
@@ -120,12 +156,12 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         )
       }
 
-      return Effect.succeed(queue.filter((e) => e.seq > clientLastSeq))
+      return Effect.succeed(roomBuffer.events.filter((event) => event.seq > clientLastSeq))
     }
 
     const replay = Effect.fn('FanoutService.replay')(function*(
       sessionId: SessionId,
-      lastAckedSeqByRoom: Record<string, number>,
+      lastAckedSeqByRoom: Record<RoomName, number>,
     ) {
       const buf = MutableHashMap.get(buffers, sessionId)
 
@@ -135,7 +171,7 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
 
       const groups = yield* Effect.forEach(
         Array.from(buf.value.perRoom),
-        ([room, queue]) => replayRoom(room, queue, lastAckedSeqByRoom[room as string] ?? 0),
+        ([room, roomBuffer]) => replayRoom(room, roomBuffer, lastAckedSeqByRoom[room] ?? 0),
       )
 
       return groups.flat()
@@ -146,6 +182,6 @@ export class FanoutService extends Effect.Service<FanoutService>()('FanoutServic
         Effect.withSpan('FanoutService.dropSession'),
       )
 
-    return { nextSeqFor, enqueueAndPush, ackUpTo, replay, dropSession }
+    return { publish, ackUpTo, replay, dropSession }
   }),
 }) {}

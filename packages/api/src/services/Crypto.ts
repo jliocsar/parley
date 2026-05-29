@@ -1,6 +1,6 @@
 import * as Effect from 'effect/Effect'
 
-import { BearerToken, MessageId, ReconnectToken } from '../domain/ids'
+import { BearerToken, MessageId, ReconnectToken, RoomId } from '../domain/ids'
 
 const randomBase64Url = (bytes: number) =>
   Effect.sync(() => {
@@ -26,12 +26,16 @@ export class CryptoService extends Effect.Service<CryptoService>()('CryptoServic
       return MessageId.make(yield* Effect.sync(() => Bun.randomUUIDv7()))
     })
 
+    const issueRoomId = Effect.fn('CryptoService.issueRoomId')(function*() {
+      return RoomId.make(yield* Effect.sync(() => crypto.randomUUID()))
+    })
+
     const hashToken = Effect.fn('CryptoService.hashToken')(function*(token: string) {
       const data = new TextEncoder().encode(token)
       const digest = yield* Effect.promise(() => crypto.subtle.digest('SHA-256', data))
       return Buffer.from(digest).toString('hex')
     })
 
-    return { issueBearerToken, issueReconnectToken, issueMessageId, hashToken }
+    return { issueBearerToken, issueReconnectToken, issueMessageId, issueRoomId, hashToken }
   }),
 }) {}

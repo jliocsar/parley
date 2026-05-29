@@ -1,4 +1,3 @@
-import * as NodeSdk from '@effect/opentelemetry/NodeSdk'
 import * as Effect from 'effect/Effect'
 import * as Layer from 'effect/Layer'
 import * as Option from 'effect/Option'
@@ -12,9 +11,13 @@ export const TelemetryLive = Layer.unwrapEffect(
       return Layer.empty
     }
 
-    return NodeSdk.layer(() => ({
-      resource: { serviceName: 'parley-server' },
-      spanProcessor: [],
-    }))
+    // An OTLP endpoint is configured, but no exporter dependency is wired yet. Warn
+    // rather than installing a NodeSdk with an empty spanProcessor — that looks live
+    // but silently exports nothing, which is worse than an honest no-op.
+    yield* Effect.logWarning(
+      'OTEL_EXPORTER_OTLP_ENDPOINT is set but trace export is not yet implemented',
+    )
+
+    return Layer.empty
   }),
 )

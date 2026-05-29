@@ -33,16 +33,6 @@ export class RoomNotFoundError extends Schema.TaggedError<RoomNotFoundError>()(
   },
 ) {}
 
-export class MessageTooLargeError extends Schema.TaggedError<MessageTooLargeError>()(
-  'MessageTooLargeError',
-  {
-    room: RoomName,
-    bytes: Schema.Number,
-    maxBytes: Schema.Number,
-    message: Schema.String,
-  },
-) {}
-
 export class RateLimitedError extends Schema.TaggedError<RateLimitedError>()('RateLimitedError', {
   retryAfterMs: Schema.Number,
   message: Schema.String,

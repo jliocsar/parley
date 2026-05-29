@@ -40,7 +40,9 @@ export class TokenRepo extends Effect.Service<TokenRepo>()('TokenRepo', {
     const findByHash = findFirstBy(authTokens.tokenHash)
 
     const insert = Effect.fn('TokenRepo.insert')(function*(label: AuthLabel, tokenHash: string) {
-      yield* db.run((h) => h.insert(authTokens).values({ label, tokenHash, createdAt: new Date() }))
+      const createdAt = new Date()
+      yield* db.run((h) => h.insert(authTokens).values({ label, tokenHash, createdAt }))
+      return createdAt
     })
 
     const deleteByLabel = Effect.fn('TokenRepo.deleteByLabel')(function*(label: AuthLabel) {

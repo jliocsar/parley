@@ -3,15 +3,20 @@ import * as Effect from 'effect/Effect'
 
 import type { DbHandle } from '../services/Db'
 import { embeddedMigrations } from './embedded'
+import type { EmbeddedMigration } from './load'
 
 export interface MigrationResult {
   readonly applied: number
   readonly total: number
 }
 
-interface DialectMigrate {
+// Drizzle's `dialect.migrate(meta, session)` is the sanctioned no-disk-IO migration path
+// (see rules/drizzle-native-migrator.md), but `dialect` and `session` are protected on
+// BunSQLiteDatabase. This is the minimal structural view we need to reach them; `session`
+// is an opaque value we only pass straight back into `migrate`, never inspect.
+interface DrizzleMigratable {
   readonly dialect: {
-    migrate(migrations: typeof embeddedMigrations, session: unknown): void
+    migrate(migrations: readonly EmbeddedMigration[], session: unknown): void
   }
   readonly session: unknown
 }
@@ -26,7 +31,8 @@ export const runEmbeddedMigrations = Effect.fn('runEmbeddedMigrations')(function
   }
 
   const applied = yield* Effect.sync(() => {
-    const internals = db as unknown as DialectMigrate
+    // The cast laundering protected access is unavoidable here; it is contained to this line.
+    const internals = db as unknown as DrizzleMigratable
     const before = countAppliedMigrations(db.$client)
 
     internals.dialect.migrate(embeddedMigrations, internals.session)

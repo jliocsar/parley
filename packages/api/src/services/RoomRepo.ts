@@ -3,15 +3,16 @@ import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
 import { rooms } from '../db/schema/rooms'
-import { RoomId } from '../domain/ids'
 import { Room, type RoomName } from '../domain/room'
+import { CryptoService } from './Crypto'
 import { Db } from './Db'
 
 export class RoomRepo extends Effect.Service<RoomRepo>()('RoomRepo', {
   accessors: true,
-  dependencies: [Db.Default],
+  dependencies: [Db.Default, CryptoService.Default],
   effect: Effect.gen(function*() {
     const db = yield* Db
+    const crypto = yield* CryptoService
 
     const decode = (row: { id: string; name: string; createdAt: Date }) =>
       Schema.decodeUnknown(Room)({
@@ -33,10 +34,12 @@ export class RoomRepo extends Effect.Service<RoomRepo>()('RoomRepo', {
         return existing.value
       }
 
+      const id = yield* crypto.issueRoomId()
+
       yield* db.run((h) =>
         h
           .insert(rooms)
-          .values({ id: RoomId.make(crypto.randomUUID()), name, createdAt: new Date() })
+          .values({ id, name, createdAt: new Date() })
           .onConflictDoNothing()
       )
 

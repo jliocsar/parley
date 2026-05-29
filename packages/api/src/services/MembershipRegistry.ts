@@ -43,13 +43,11 @@ export class MembershipRegistry extends Effect.Service<MembershipRegistry>()('Me
     const join = (room: RoomName, sessionId: SessionId, nickname: Nickname) =>
       Effect.sync((): JoinResult => {
         const state = getOrInitRoom(room)
-        const owner = Array.from(state).find(
-          ([candidateSessionId, candidateNickname]) =>
-            candidateNickname === nickname && candidateSessionId !== sessionId,
-        )?.[0]
 
-        if (owner !== undefined) {
-          return { ok: false, collidedWith: owner }
+        for (const [candidateSessionId, candidateNickname] of state) {
+          if (candidateNickname === nickname && candidateSessionId !== sessionId) {
+            return { ok: false, collidedWith: candidateSessionId }
+          }
         }
 
         state.set(sessionId, nickname)

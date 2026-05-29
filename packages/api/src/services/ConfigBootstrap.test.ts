@@ -4,7 +4,8 @@ import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
-import { ensureLocalServerEntry, renderLocalServersToml } from './ConfigBootstrap'
+import { parseServersToml } from '../servers-config'
+import { ensureLocalServerEntry } from './ConfigBootstrap'
 
 let workdir: string
 let path: string
@@ -76,11 +77,14 @@ describe('ensureLocalServerEntry', () => {
   })
 })
 
-describe('renderLocalServersToml', () => {
-  it('produces a parseable TOML snippet with default and server entry', () => {
-    const toml = renderLocalServersToml('ws://127.0.0.1:7539')
-    expect(toml).toBe(
-      ['default = "local"', '', '[servers.local]', 'url = "ws://127.0.0.1:7539"', ''].join('\n'),
-    )
+describe('ensureLocalServerEntry rendered output', () => {
+  it('writes TOML that decodes to default "local" with the local server url', async () => {
+    await run(ensureLocalServerEntry({ bind: '127.0.0.1', port: 7539, path }))
+
+    const written = await Bun.file(path).text()
+    const parsed = await run(parseServersToml(written))
+
+    expect(parsed.default).toBe('local')
+    expect(parsed.servers.local?.url).toBe('ws://127.0.0.1:7539')
   })
 })

@@ -5,6 +5,7 @@
   "private": true,
   "exports": {
     "./domain": "./src/domain/index.ts",
+    "./servers-config": "./src/servers-config.ts",
     "./wire": "./src/wire/index.ts",
     "./tools": "./src/tools/index.ts",
     "./errors": "./src/errors/index.ts",

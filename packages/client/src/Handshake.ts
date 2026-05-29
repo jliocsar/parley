@@ -1,11 +1,21 @@
 import type { BearerToken, ReconnectToken, SessionId } from '@parley/api/domain'
-import { type HelloErrFrame, HelloErrFrame as HelloErrSchema, HelloOkFrame } from '@parley/api/wire'
+import {
+  type HelloErrFrame,
+  HelloErrFrame as HelloErrSchema,
+  HelloFrame,
+  HelloOkFrame,
+} from '@parley/api/wire'
 import * as Effect from 'effect/Effect'
 import * as Option from 'effect/Option'
 import * as Schema from 'effect/Schema'
 import { WsConnection } from './WsConnection'
 
 export const CLIENT_VERSION = '0.0.0'
+
+// A malformed-but-open server could stream frames that never decode to a hello
+// response. Bound how many we tolerate before failing the handshake instead of
+// spinning forever with zero diagnostics.
+const MAX_UNDECODABLE_FRAMES = 16
 
 export type HelloResult =
   | {
@@ -18,6 +28,7 @@ export type HelloResult =
 
 const HelloResponseSchema = Schema.Union(HelloOkFrame, HelloErrSchema)
 const decodeHelloResponse = Schema.decodeUnknown(HelloResponseSchema)
+const encodeHello = Schema.encodeSync(Schema.parseJson(HelloFrame))
 
 export class Handshake extends Effect.Service<Handshake>()('Handshake', {
   accessors: true,
@@ -33,12 +44,14 @@ export class Handshake extends Effect.Service<Handshake>()('Handshake', {
         readonly lastAckedSeqByRoom: Record<string, number>
       }>
     }) {
-      yield* ws.send({
+      yield* ws.send(encodeHello({
         _tag: 'hello',
         clientVersion: CLIENT_VERSION,
         ...(Option.isSome(params.authToken) ? { authToken: params.authToken.value } : {}),
         ...(Option.isSome(params.resume) ? { resume: params.resume.value } : {}),
-      })
+      }))
+
+      let undecodable = 0
 
       for (;;) {
         const inbound = yield* ws.take()
@@ -50,6 +63,22 @@ export class Handshake extends Effect.Service<Handshake>()('Handshake', {
         const decoded = yield* decodeHelloResponse(inbound.value).pipe(Effect.either)
 
         if (decoded._tag === 'Left') {
+          undecodable += 1
+
+          yield* Effect.logWarning('handshake: undecodable frame', {
+            error: decoded.left.message,
+            raw: inbound.value,
+            count: undecodable,
+          })
+
+          if (undecodable >= MAX_UNDECODABLE_FRAMES) {
+            return yield* Effect.die(
+              new Error(
+                `Handshake: gave up after ${String(MAX_UNDECODABLE_FRAMES)} undecodable frames`,
+              ),
+            )
+          }
+
           continue
         }
 

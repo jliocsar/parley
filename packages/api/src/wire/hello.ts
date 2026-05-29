@@ -26,7 +26,6 @@ export type HelloOkFrame = Schema.Schema.Type<typeof HelloOkFrame>
 
 export const HelloErrorCode = Schema.Literal(
   'AuthRequiredError',
-  'BadTokenError',
   'TokenRevokedError',
   'VersionMismatchError',
   'ServerShuttingDownError',

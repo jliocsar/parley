@@ -6,9 +6,9 @@ import type {
   RoomName,
   SessionId,
 } from '@parley/api/domain'
-import * as Tools from '@parley/api/tools'
+import { type ToolName, TOOLS } from '@parley/api/tools'
 import {
-  type ClientFrame,
+  ClientFrame,
   type HelloErrFrame,
   type RoomMessageEvent,
   ServerFrame,
@@ -19,6 +19,7 @@ import {
 } from '@parley/api/wire'
 import * as Deferred from 'effect/Deferred'
 import * as Effect from 'effect/Effect'
+import * as Exit from 'effect/Exit'
 import * as MutableHashMap from 'effect/MutableHashMap'
 import * as Option from 'effect/Option'
 import * as PubSub from 'effect/PubSub'
@@ -39,11 +40,23 @@ export class HandshakeFailedError extends Schema.TaggedError<HandshakeFailedErro
 ) {}
 
 const decodeServerFrame = Schema.decodeUnknown(ServerFrame)
-const decodeJoin = Schema.decodeUnknown(Tools.JoinRoom.Result)
-const decodeLeave = Schema.decodeUnknown(Tools.LeaveRoom.Result)
-const decodeList = Schema.decodeUnknown(Tools.ListRooms.Result)
-const decodeSend = Schema.decodeUnknown(Tools.SendMessage.Result)
-const decodeWho = Schema.decodeUnknown(Tools.WhoIsHere.Result)
+const encodeClientFrame = Schema.encodeSync(Schema.parseJson(ClientFrame))
+
+// The decoded result type of a given tool, derived from the API registry.
+type ToolResult<N extends ToolName> = Schema.Schema.Type<(typeof TOOLS)[N]['result']>
+
+// Per-tool response decoders, keyed by the SAME registry key that builds the
+// request frame. Driving decoder selection off the registry — rather than off
+// whichever method happened to be called — closes the "decode the response
+// against the wrong schema" gap: tool.ok.result is Schema.Unknown and only the
+// requestId correlates a response to its request.
+const resultDecoders = {
+  join_room: Schema.decodeUnknown(TOOLS.join_room.result),
+  leave_room: Schema.decodeUnknown(TOOLS.leave_room.result),
+  list_rooms: Schema.decodeUnknown(TOOLS.list_rooms.result),
+  send_message: Schema.decodeUnknown(TOOLS.send_message.result),
+  who_is_here: Schema.decodeUnknown(TOOLS.who_is_here.result),
+} as const
 
 interface ClientState {
   readonly sessionId: SessionId
@@ -67,18 +80,18 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
     const state = yield* Ref.make<Option.Option<ClientState>>(Option.none())
     const events = yield* PubSub.unbounded<ParleyEvent>()
     const pending = MutableHashMap.empty<ToolRequestId, Deferred.Deferred<ToolOkRes, ToolErrRes>>()
-    const lastAckedSeqByRoom = new Map<string, number>()
+    const lastAckedSeqByRoom = new Map<RoomName, number>()
 
-    const settlePending = <F extends ToolOkRes | ToolErrRes>(
-      frame: F,
-      finish: (def: Deferred.Deferred<ToolOkRes, ToolErrRes>, frame: F) => Effect.Effect<unknown>,
+    const settlePending = (
+      requestId: ToolRequestId,
+      exit: Exit.Exit<ToolOkRes, ToolErrRes>,
     ) =>
-      Effect.gen(function*() {
-        const def = MutableHashMap.get(pending, frame.requestId)
+      Effect.sync(() => {
+        const def = MutableHashMap.get(pending, requestId)
 
         if (Option.isSome(def)) {
-          MutableHashMap.remove(pending, frame.requestId)
-          yield* finish(def.value, frame)
+          MutableHashMap.remove(pending, requestId)
+          Deferred.unsafeDone(def.value, exit)
         }
       })
 
@@ -87,7 +100,10 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
         const decoded = yield* decodeServerFrame(raw).pipe(Effect.either)
 
         if (decoded._tag === 'Left') {
-          yield* Effect.logWarning('failed to decode server frame')
+          yield* Effect.logWarning('failed to decode server frame', {
+            error: decoded.left.message,
+            raw,
+          })
           return
         }
 
@@ -105,12 +121,12 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
           }
 
           case 'tool.ok': {
-            yield* settlePending(frame, (def, f) => Deferred.succeed(def, f))
+            yield* settlePending(frame.requestId, Exit.succeed(frame))
             return
           }
 
           case 'tool.err': {
-            yield* settlePending(frame, (def, f) => Deferred.fail(def, f))
+            yield* settlePending(frame.requestId, Exit.fail(frame))
             return
           }
         }
@@ -178,16 +194,23 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       }
     }).pipe(Effect.catchAllCause((c) => Effect.logError('client pump crashed', c)))
 
-    const call = <A>(
+    // Single generic dispatch. The decoder is selected from the registry by the
+    // same `toolName` key used to build the request frame, so request encoding
+    // and response decoding can never drift to different tools.
+    const call = <N extends ToolName>(
+      toolName: N,
       makeFrame: (requestId: ToolRequestId) => ClientFrame,
-      decode: (raw: unknown) => Effect.Effect<A, unknown>,
-    ) =>
+    ): Effect.Effect<ToolResult<N>, unknown> =>
       Effect.gen(function*() {
         const requestId = makeReqId()
         const def = yield* Deferred.make<ToolOkRes, ToolErrRes>()
         MutableHashMap.set(pending, requestId, def)
-        yield* ws.send(makeFrame(requestId))
+        yield* ws.send(encodeClientFrame(makeFrame(requestId)))
         const res = yield* Deferred.await(def)
+        const decode = resultDecoders[toolName] as (
+          raw: unknown,
+        ) => Effect.Effect<ToolResult<N>, unknown>
+
         return yield* decode(res.result)
       })
 
@@ -223,39 +246,44 @@ export class ParleyClient extends Effect.Service<ParleyClient>()('ParleyClient',
       room: RoomName,
       nickname?: Nickname,
     ) {
-      return yield* call(
-        (requestId) =>
-          nickname !== undefined
-            ? { _tag: 'tool.join_room', requestId, room, nickname }
-            : { _tag: 'tool.join_room', requestId, room },
-        decodeJoin,
-      )
+      return yield* call('join_room', (requestId) =>
+        nickname !== undefined
+          ? { _tag: 'tool.join_room', requestId, room, nickname }
+          : { _tag: 'tool.join_room', requestId, room })
     })
 
     const leaveRoom = Effect.fn('ParleyClient.leaveRoom')(function*(room: RoomName) {
-      return yield* call((requestId) => ({ _tag: 'tool.leave_room', requestId, room }), decodeLeave)
+      return yield* call(
+        'leave_room',
+        (requestId) => ({ _tag: 'tool.leave_room', requestId, room }),
+      )
     })
 
     const listRooms = Effect.fn('ParleyClient.listRooms')(function*() {
-      return yield* call((requestId) => ({ _tag: 'tool.list_rooms', requestId }), decodeList)
+      return yield* call('list_rooms', (requestId) => ({ _tag: 'tool.list_rooms', requestId }))
     })
 
     const sendMessage = Effect.fn('ParleyClient.sendMessage')(function*(
       room: RoomName,
       body: MessageBody,
     ) {
-      return yield* call(
-        (requestId) => ({ _tag: 'tool.send_message', requestId, room, body }),
-        decodeSend,
-      )
+      return yield* call('send_message', (requestId) => ({
+        _tag: 'tool.send_message',
+        requestId,
+        room,
+        body,
+      }))
     })
 
     const whoIsHere = Effect.fn('ParleyClient.whoIsHere')(function*(room: RoomName) {
-      return yield* call((requestId) => ({ _tag: 'tool.who_is_here', requestId, room }), decodeWho)
+      return yield* call(
+        'who_is_here',
+        (requestId) => ({ _tag: 'tool.who_is_here', requestId, room }),
+      )
     })
 
     const ack = Effect.fn('ParleyClient.ack')(function*(room: RoomName, seq: number) {
-      yield* ws.send({ _tag: 'ack', room, seq })
+      yield* ws.send(encodeClientFrame({ _tag: 'ack', room, seq }))
       lastAckedSeqByRoom.set(room, seq)
     })
 

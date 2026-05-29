@@ -6,9 +6,11 @@ import { RoomName } from './room'
 
 export const MESSAGE_BODY_MAX_BYTES = 8192
 
+const utf8Encoder = new TextEncoder()
+
 export const MessageBody = Schema.String.pipe(
   Schema.minLength(1),
-  Schema.filter((s) => new TextEncoder().encode(s).byteLength <= MESSAGE_BODY_MAX_BYTES, {
+  Schema.filter((s) => utf8Encoder.encode(s).byteLength <= MESSAGE_BODY_MAX_BYTES, {
     message: () => `Message body must be ≤ ${MESSAGE_BODY_MAX_BYTES} bytes UTF-8`,
   }),
   Schema.brand('@parley/MessageBody'),

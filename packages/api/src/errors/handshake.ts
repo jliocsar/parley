@@ -1,5 +1,8 @@
 import * as Schema from 'effect/Schema'
 
+import { SessionId } from '../domain/ids'
+import { RoomName } from '../domain/room'
+
 export class VersionMismatchError extends Schema.TaggedError<VersionMismatchError>()(
   'VersionMismatchError',
   {
@@ -19,7 +22,7 @@ export class ServerShuttingDownError extends Schema.TaggedError<ServerShuttingDo
 export class UnknownSessionError extends Schema.TaggedError<UnknownSessionError>()(
   'UnknownSessionError',
   {
-    sessionId: Schema.String,
+    sessionId: SessionId,
     message: Schema.String,
   },
 ) {}
@@ -34,7 +37,7 @@ export class BadReconnectTokenError extends Schema.TaggedError<BadReconnectToken
 export class ReplayBufferOverflowError extends Schema.TaggedError<ReplayBufferOverflowError>()(
   'ReplayBufferOverflowError',
   {
-    room: Schema.String,
+    room: RoomName,
     message: Schema.String,
   },
 ) {}

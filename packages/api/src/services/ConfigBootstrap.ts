@@ -3,13 +3,16 @@ import { join } from 'node:path'
 
 import * as Effect from 'effect/Effect'
 
+import {
+  isLoopback,
+  LOCAL_SERVER_NAME,
+  localServerEntry,
+  localServerUrl,
+  renderServersToml,
+  type ServersConfigShape,
+} from '../servers-config'
+
 const DEFAULT_SERVERS_CONFIG_PATH = join(homedir(), '.config', 'parley', 'servers.toml')
-
-const isLoopback = (bind: string) =>
-  bind === '127.0.0.1' || bind === '::1' || bind === 'localhost' || bind.startsWith('127.')
-
-export const renderLocalServersToml = (url: string) =>
-  ['default = "local"', '', '[servers.local]', `url = ${JSON.stringify(url)}`, ''].join('\n')
 
 export interface EnsureLocalServerEntryParams {
   readonly bind: string
@@ -32,9 +35,16 @@ export const ensureLocalServerEntry = Effect.fn('ensureLocalServerEntry')(functi
     return { written: false as const, reason: 'already-exists' as const, path }
   }
 
-  const url = `ws://127.0.0.1:${params.port}`
-  yield* Effect.promise(() => Bun.write(path, renderLocalServersToml(url)))
-  yield* Effect.logInfo(`Wrote default client config at ${path} → server "local" = ${url}`)
+  const url = localServerUrl(params.port)
+  const config: ServersConfigShape = {
+    default: LOCAL_SERVER_NAME,
+    servers: { [LOCAL_SERVER_NAME]: localServerEntry(params.port) },
+  }
+
+  yield* Effect.promise(() => Bun.write(path, renderServersToml(config)))
+  yield* Effect.logInfo(
+    `Wrote default client config at ${path} → server "${LOCAL_SERVER_NAME}" = ${url}`,
+  )
 
   return { written: true as const, path, url }
 })

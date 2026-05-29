@@ -18,15 +18,9 @@ export class TokenService extends Effect.Service<TokenService>()('TokenService',
       const token = yield* crypto.issueBearerToken()
       const hash = yield* crypto.hashToken(token)
 
-      yield* repo.insert(label, hash)
+      const createdAt = yield* repo.insert(label, hash)
 
-      const record = yield* repo.findByLabel(label)
-      const createdAt = Option.match(record, {
-        onNone: () => DateTime.unsafeNow(),
-        onSome: (r) => r.createdAt,
-      })
-
-      return { label, token, createdAt } satisfies IssuedToken
+      return { label, token, createdAt: DateTime.unsafeFromDate(createdAt) } satisfies IssuedToken
     })
 
     const revoke = Effect.fn('TokenService.revoke')(function*(label: AuthLabel) {
@@ -44,10 +38,7 @@ export class TokenService extends Effect.Service<TokenService>()('TokenService',
       return yield* Option.match(record, {
         onNone: () =>
           Effect.fail(
-            new TokenRevokedError({
-              label: '',
-              message: 'Token is not recognised or has been revoked',
-            }),
+            new TokenRevokedError({ message: 'Token is not recognised or has been revoked' }),
           ),
         onSome: (r) => repo.touchLastUsed(r.label).pipe(Effect.as(r.label)),
       })

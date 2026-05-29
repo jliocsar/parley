@@ -3,7 +3,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js'
 import { MCP_SERVER_INSTRUCTIONS } from '@parley/api/tools'
-import { ParleyClient } from '@parley/client'
+import { ParleyClient, type ParleyEvent } from '@parley/client'
 import * as Cause from 'effect/Cause'
 import * as Effect from 'effect/Effect'
 import * as Exit from 'effect/Exit'
@@ -18,20 +18,23 @@ import { type ToolName, TOOLS } from './tools/registry'
 // MCP requires every tool's inputSchema to be a JSON-Schema object with `type: "object"`.
 // `JSONSchema.make(Schema.Struct({}))` emits `{ anyOf: [{type:'object'},{type:'array'}] }` which
 // MCP rejects. Normalise here so empty-arg tools get an explicit object shape.
-const toInputSchema = <A, I>(schema: Schema.Schema<A, I>) => {
+// Accepts any schema — JSONSchema.make only reads the schema's AST, so the
+// heterogeneous union of per-tool arg schemas from the registry is fine here.
+const toInputSchema = (schema: Schema.Schema.AnyNoContext) => {
   const json = JSONSchema.make(schema) as unknown as Record<string, unknown>
+
+  // The cast is sound because MCP only inspects `type` on the inputSchema, and
+  // we only assert the shape after confirming `type === 'object'` — the decoded
+  // `properties`/`required` JSON-Schema fields ride along untouched on `json`.
   return json.type === 'object'
     ? (json as { type: 'object' })
     : { type: 'object' as const, properties: {}, additionalProperties: false }
 }
 
-const inputSchemas = {
-  join_room: toInputSchema(TOOLS.join_room.args),
-  leave_room: toInputSchema(TOOLS.leave_room.args),
-  list_rooms: toInputSchema(TOOLS.list_rooms.args),
-  send_message: toInputSchema(TOOLS.send_message.args),
-  who_is_here: toInputSchema(TOOLS.who_is_here.args),
-} as const
+// Generated from the API registry — adding a tool there is the only edit needed.
+const inputSchemas = Object.fromEntries(
+  (Object.keys(TOOLS) as ToolName[]).map((key) => [key, toInputSchema(TOOLS[key].args)]),
+) as Record<ToolName, ReturnType<typeof toInputSchema>>
 
 const isToolName = (name: string): name is ToolName => name in TOOLS
 
@@ -55,12 +58,25 @@ export class McpServer extends Effect.Service<McpServer>()('McpServer', {
     const client = yield* ParleyClient
     const runtime = yield* Effect.runtime()
 
-    yield* Effect.forkScoped(
-      Stream.runForEach(client.incoming, (event) =>
-        event._tag === 'room.message'
-          ? channels.deliverMessage(event).pipe(Effect.zipRight(client.ack(event.room, event.seq)))
-          : channels.deliverSystemError(event)),
-    )
+    // Invariant: a room.message is acked ONLY after channel delivery succeeds —
+    // the ack is sequenced after deliverMessage via zipRight, so a delivery
+    // failure short-circuits before the ack runs. system.error carries no seq
+    // and is never acked.
+    const deliverInbound = (event: ParleyEvent) => {
+      switch (event._tag) {
+        case 'room.message': {
+          return channels.deliverMessage(event).pipe(
+            Effect.zipRight(client.ack(event.room, event.seq)),
+          )
+        }
+
+        case 'system.error': {
+          return channels.deliverSystemError(event)
+        }
+      }
+    }
+
+    yield* Effect.forkScoped(Stream.runForEach(client.incoming, deliverInbound))
 
     const makeHandler = <A, AI, R, RI>(
       schema: { args: Schema.Schema<A, AI>; result: Schema.Schema<R, RI> },

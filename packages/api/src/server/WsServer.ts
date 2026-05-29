@@ -7,7 +7,8 @@ import * as Schema from 'effect/Schema'
 import { ServerConfig } from '../config'
 import type { AuthLabel, BearerToken } from '../domain/ids'
 import { SessionId } from '../domain/ids'
-import { AuthRequiredError, TokenRevokedError } from '../errors/auth'
+import type { TokenRevokedError } from '../errors/auth'
+import { AuthRequiredError } from '../errors/auth'
 import { CryptoService } from '../services/Crypto'
 import { FanoutService } from '../services/FanoutService'
 import { MembershipRegistry } from '../services/MembershipRegistry'
@@ -28,14 +29,28 @@ import { ToolRuntime } from './ToolRuntime'
 const SERVER_VERSION = '0.1.0'
 const SESSION_EXPIRY_MS = 60_000
 
+// The WebSocket close (code, reason) for every handshake rejection, keyed by error code.
+// Exhaustive over HelloErrorCode so the close contract is auditable in one place and a new
+// error code cannot be added without deciding how the socket closes.
+const HELLO_CLOSE: Record<HelloErrorCode, readonly [number, string]> = {
+  AuthRequiredError: [4000, 'auth failed'],
+  TokenRevokedError: [4000, 'auth failed'],
+  VersionMismatchError: [4004, 'version mismatch'],
+  ServerShuttingDownError: [1001, 'server shutting down'],
+  UnknownSessionError: [4001, 'unknown session'],
+  BadReconnectTokenError: [4002, 'bad reconnect token'],
+  ReplayBufferOverflowError: [4003, 'replay buffer overflow'],
+  BadHandshakeFrameError: [1002, 'bad handshake'],
+}
+
 interface WsData {
   sessionId: SessionId
   handshakeComplete: boolean
 }
 
-const encodeHelloOk = Schema.encodeSync(HelloOkFrame)
-const encodeHelloErr = Schema.encodeSync(HelloErrFrame)
-const encodeServerFrame = Schema.encodeSync(ServerFrame)
+const encodeHelloOk = Schema.encodeSync(Schema.parseJson(HelloOkFrame))
+const encodeHelloErr = Schema.encodeSync(Schema.parseJson(HelloErrFrame))
+const encodeServerFrame = Schema.encodeSync(Schema.parseJson(ServerFrame))
 const decodeHello = Schema.decodeUnknown(HelloFrame)
 const decodeClient = Schema.decodeUnknown(ClientFrame)
 
@@ -76,23 +91,23 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
     )
 
     const safeSend = (ws: ServerWebSocket<WsData>, json: string) =>
-      Effect.sync(() => {
-        try {
-          ws.send(json)
-        } catch {}
-      })
+      Effect.try(() => ws.send(json)).pipe(
+        Effect.catchTag(
+          'UnknownException',
+          () => Effect.logDebug('failed to send frame to socket'),
+        ),
+      )
 
-    // eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- `I` documents the encoder's output shape for readers
-    const sendEncoded = <A, I>(
+    const sendEncoded = <A>(
       ws: ServerWebSocket<WsData>,
-      encode: (a: A) => I,
+      encode: (a: A) => string,
       frame: A,
       label: string,
     ) =>
       Effect.try(() => encode(frame)).pipe(
         Effect.matchEffect({
           onFailure: () => Effect.logError(`failed to encode ${label}`),
-          onSuccess: (e) => safeSend(ws, JSON.stringify(e)),
+          onSuccess: (encoded) => safeSend(ws, encoded),
         }),
       )
 
@@ -128,24 +143,24 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
       return tokens.verify(token).pipe(
         Effect.map(Option.some),
-        Effect.catchAll((err) =>
-          err._tag === 'TokenRevokedError'
-            ? Effect.fail(err)
-            : Effect.fail(new TokenRevokedError({ label: '', message: err.message }))
-        ),
+        // A dead database (DbError) or a corrupt row (ParseError) is not an auth decision —
+        // crash rather than masking infrastructure failure as "token revoked".
+        Effect.catchTags({
+          DbError: (cause) => Effect.die(cause),
+          ParseError: (cause) => Effect.die(cause),
+        }),
       )
     }
 
-    const closeAuthFailure = (
-      ws: ServerWebSocket<WsData>,
-      code: 'AuthRequiredError' | 'TokenRevokedError',
-      message: string,
-    ) =>
-      sendHelloErr(ws, code, message).pipe(
+    const rejectHello = (ws: ServerWebSocket<WsData>, code: HelloErrorCode, message: string) => {
+      const [closeCode, closeReason] = HELLO_CLOSE[code]
+
+      return sendHelloErr(ws, code, message).pipe(
         Effect.zipRight(Effect.sync(() => {
-          ws.close(4000, 'auth failed')
+          ws.close(closeCode, closeReason)
         })),
       )
+    }
 
     const handleResumeHello = (
       ws: ServerWebSocket<WsData>,
@@ -155,37 +170,30 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         const existing = yield* sessions.get(resume.sessionId)
 
         if (Option.isNone(existing)) {
-          yield* sendHelloErr(ws, 'UnknownSessionError', 'No such session')
-          yield* Effect.sync(() => {
-            ws.close(4001, 'unknown session')
-          })
+          yield* rejectHello(ws, 'UnknownSessionError', 'No such session')
           return
         }
 
         if (existing.value.reconnectToken !== resume.reconnectToken) {
-          yield* sendHelloErr(ws, 'BadReconnectTokenError', 'Bad reconnect token')
-          yield* Effect.sync(() => {
-            ws.close(4002, 'bad reconnect token')
-          })
+          yield* rejectHello(ws, 'BadReconnectTokenError', 'Bad reconnect token')
           return
         }
 
         const replayed = yield* fanout
-          .replay(resume.sessionId, resume.lastAckedSeqByRoom as Record<string, number>)
+          .replay(resume.sessionId, resume.lastAckedSeqByRoom)
           .pipe(Effect.either)
 
         if (replayed._tag === 'Left') {
-          yield* sendHelloErr(ws, 'ReplayBufferOverflowError', replayed.left.message)
-          yield* Effect.sync(() => {
-            ws.close(4003, 'replay buffer overflow')
-          })
+          yield* rejectHello(ws, 'ReplayBufferOverflowError', replayed.left.message)
           return
         }
 
         ws.data.sessionId = resume.sessionId
-        ws.data.handshakeComplete = true
         yield* cancelExpiry(resume.sessionId)
         yield* sessions.attachSocket(resume.sessionId, ws)
+        // Mark handshake-complete only after the socket is attached, so the invariant
+        // "handshakeComplete ⇒ session has an attached socket" always holds.
+        ws.data.handshakeComplete = true
 
         yield* sendHelloOk(ws, {
           _tag: 'hello.ok',
@@ -222,8 +230,8 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         })
       }).pipe(
         Effect.catchTags({
-          AuthRequiredError: (err) => closeAuthFailure(ws, 'AuthRequiredError', err.message),
-          TokenRevokedError: (err) => closeAuthFailure(ws, 'TokenRevokedError', err.message),
+          AuthRequiredError: (err) => rejectHello(ws, 'AuthRequiredError', err.message),
+          TokenRevokedError: (err) => rejectHello(ws, 'TokenRevokedError', err.message),
         }),
       )
 
@@ -232,10 +240,7 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
         const decoded = yield* decodeHello(raw).pipe(Effect.either)
 
         if (decoded._tag === 'Left') {
-          yield* sendHelloErr(ws, 'BadHandshakeFrameError', 'Could not decode hello frame')
-          yield* Effect.sync(() => {
-            ws.close(1002, 'bad handshake')
-          })
+          yield* rejectHello(ws, 'BadHandshakeFrameError', 'Could not decode hello frame')
           return
         }
 
@@ -260,6 +265,10 @@ export class WsServer extends Effect.Service<WsServer>()('WsServer', {
 
     const handleMessage = (ws: ServerWebSocket<WsData>, text: string) =>
       Effect.gen(function*() {
+        // Parse JSON before schema-decoding so we can distinguish transport garbage
+        // (not even JSON → silently dropped) from a well-formed-but-invalid frame
+        // (decoded below → answered with a protocol error). Fusing this into
+        // Schema.parseJson would collapse both into one indistinguishable ParseError.
         const parsed = yield* Effect.try({
           try: () => JSON.parse(text) as unknown,
           catch: () => 'bad-json' as const,

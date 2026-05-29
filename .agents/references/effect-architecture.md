@@ -77,9 +77,17 @@ Pattern: every service uses `Effect.Service<Self>()(tag, { accessors: true, depe
 
 | Service | Kind | Depends on | Purpose |
 |---|---|---|---|
-| `ServersConfig` | service | — | Reads/writes `~/.config/parley/servers.toml` via `Bun.TOML.parse` + Schema decoding; resolves a name (or default) to `{ url, token }`. Resolver falls back to `ws://127.0.0.1:7539` when no entry is configured for `local`, so first-time clients work even before the file exists. |
+| `ServersConfig` | service | — | Reads/writes `~/.config/parley/servers.toml`; resolves a name (or default) to `{ url, token }`. Resolver falls back to the local-server URL when no entry is configured for `local`, so first-time clients work even before the file exists. Fails with the tagged `ServerNotConfiguredError` for any other unknown name. The TOML schema + codec, the `LOCAL_SERVER_NAME` / `DEFAULT_PORT` constants, `localServerUrl` / `localServerEntry`, and `isLoopback` are NOT defined here — they live in the shared module below; this service imports them and only owns the I/O + resolver logic. |
 
-The matching server-side bootstrap lives in `@parley/api/services/ConfigBootstrap.ts` — `ensureLocalServerEntry({ bind, port })` is called at the start of `parley-server run` and writes the same `servers.toml` (with `default = "local"`) on first boot when bound to loopback. Idempotent: never overwrites an existing file, never writes when bind is non-loopback.
+### Shared servers-config module (single source of truth)
+
+`packages/api/src/servers-config.ts` (subpath export `@parley/api/servers-config`) is the ONE home for everything client/operator config shares between server and CLI. It must NOT import server runtime (no Bun.serve / Drizzle / OTel) so the CLI can import it without pulling the runtime. Exports:
+
+- TOML schema + codec: `ServerEntry`, `ServersConfigSchema`, `ServersConfigShape`, `parseServersToml`, `renderServersToml`, `emptyServersConfig` — the single TOML emitter/parser. There is exactly one renderer; do not hand-roll a second special-cased one.
+- Local-server constants: `LOCAL_SERVER_NAME = 'local'`, `DEFAULT_PORT = 7539`, plus `localServerUrl(port)` and `localServerEntry(port)` helpers. `config.ts`'s `ServerConfig.port` default and the CLI resolver fallback both reference these, so the operator bind port and client fallback URL can never desync.
+- `isLoopback(bind)`: the single loopback predicate gating `authEnabled = !isLoopback(bind)`. Matches `127.0.0.1`, the `127.*` block, `::1`, `::ffff:127.0.0.1`, and bare `localhost`. One definition keeps the server auth toggle and the client bootstrap in lockstep — divergence here is an auth-bypass risk.
+
+The matching server-side bootstrap lives in `@parley/api/services/ConfigBootstrap.ts` — `ensureLocalServerEntry({ bind, port })` is called at the start of `parley-server run`, builds a `ServersConfigShape` (`{ default: 'local', servers: { local: localServerEntry(port) } }`) and writes it with the shared `renderServersToml` on first boot when bound to loopback. Idempotent: never overwrites an existing file, never writes when bind is non-loopback.
 
 ## Composed Layers
 

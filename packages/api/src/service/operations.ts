@@ -2,8 +2,10 @@ import { mkdir, unlink } from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 import * as Data from 'effect/Data'
-
 import * as Effect from 'effect/Effect'
+import * as Option from 'effect/Option'
+
+import { ServerConfig } from '../config'
 import {
   ENV_FILE,
   LAUNCHD_ERR_LOG,
@@ -54,11 +56,25 @@ const writeFile = (path: string, content: string) =>
       }),
   })
 
+export const isFileNotFound = (e: unknown): boolean =>
+  typeof e === 'object' && e !== null && 'code' in e
+  && (e as { code?: unknown }).code === 'ENOENT'
+
 const removeFile = (path: string) =>
   Effect.tryPromise({
     try: () => unlink(path),
-    catch: () => new ServiceCommandError({ message: `Could not remove ${path}` }),
-  }).pipe(Effect.catchAll(() => Effect.void))
+    catch: (e) => ({ e, alreadyGone: isFileNotFound(e) }),
+  }).pipe(
+    Effect.catchAll(({ e, alreadyGone }) => {
+      if (alreadyGone) {
+        return Effect.void
+      }
+
+      const detail = e instanceof Error ? e.message : String(e)
+
+      return Effect.logWarning(`Could not remove ${path}: ${detail}`)
+    }),
+  )
 
 const ensureEnvFile = Effect.fn('ensureEnvFile')(function*() {
   const file = Bun.file(ENV_FILE)
@@ -68,11 +84,13 @@ const ensureEnvFile = Effect.fn('ensureEnvFile')(function*() {
     return
   }
 
+  const config = yield* ServerConfig
+
   const initial = renderEnvFile({
-    PARLEY_PORT: process.env.PARLEY_PORT,
-    PARLEY_BIND: process.env.PARLEY_BIND,
-    PARLEY_DB_FILE: process.env.PARLEY_DB_FILE,
-    OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT,
+    PARLEY_PORT: String(config.port),
+    PARLEY_BIND: config.bind,
+    PARLEY_DB_FILE: config.dbFile,
+    OTEL_EXPORTER_OTLP_ENDPOINT: Option.getOrUndefined(config.otlpEndpoint),
   })
 
   yield* writeFile(ENV_FILE, initial)
@@ -84,15 +102,17 @@ const runCmd = (
   opts: { capture?: boolean; failOnNonZero?: boolean } = {},
 ): Effect.Effect<{ code: number; stdout: string; stderr: string }, ServiceCommandError> =>
   Effect.gen(function*() {
+    const { capture = false, failOnNonZero = false } = opts
+
     const proc = Bun.spawn(cmd, {
-      stdout: opts.capture ? 'pipe' : 'inherit',
-      stderr: opts.capture ? 'pipe' : 'inherit',
+      stdout: capture ? 'pipe' : 'inherit',
+      stderr: capture ? 'pipe' : 'inherit',
     })
-    const stdout = opts.capture ? yield* Effect.promise(() => new Response(proc.stdout).text()) : ''
-    const stderr = opts.capture ? yield* Effect.promise(() => new Response(proc.stderr).text()) : ''
+    const stdout = capture ? yield* Effect.promise(() => new Response(proc.stdout).text()) : ''
+    const stderr = capture ? yield* Effect.promise(() => new Response(proc.stderr).text()) : ''
     const code = yield* Effect.promise(() => proc.exited)
 
-    if (code !== 0 && (opts.failOnNonZero ?? false)) {
+    if (code !== 0 && failOnNonZero) {
       return yield* new ServiceCommandError({
         message: `${cmd.join(' ')} failed with exit code ${code}${stderr ? `: ${stderr}` : ''}`,
       })
@@ -101,7 +121,26 @@ const runCmd = (
     return { code, stdout, stderr }
   })
 
-const launchdDomain = () => `gui/${process.getuid?.() ?? ''}`
+// A launchd domain always carries a real macOS user id (`gui/<uid>`). If the
+// uid can't be determined we fail fast here rather than shipping a malformed
+// `gui/` domain into launchctl, where it would surface as an opaque error.
+const launchdDomain = Effect.fn('launchdDomain')(function*() {
+  const uid = process.getuid?.()
+
+  if (uid === undefined) {
+    return yield* new ServiceCommandError({
+      message: 'Cannot determine macOS user id for launchd domain (process.getuid unavailable).',
+    })
+  }
+
+  return `gui/${uid}`
+})
+
+const launchdService = Effect.fn('launchdService')(function*() {
+  const domain = yield* launchdDomain()
+
+  return `${domain}/${LAUNCHD_LABEL}`
+})
 
 interface PlatformCommands {
   readonly install: (binary: string) => Effect.Effect<void, ServiceCommandError>
@@ -117,7 +156,6 @@ interface PlatformCommands {
 }
 
 const serviceUnit = `${SERVICE_LABEL}.service`
-const launchdService = () => `${launchdDomain()}/${LAUNCHD_LABEL}`
 
 const platformCommands: Record<Platform, PlatformCommands> = {
   systemd: {
@@ -179,7 +217,7 @@ const platformCommands: Record<Platform, PlatformCommands> = {
         yield* writeFile(LAUNCHD_PLIST_PATH, renderLaunchdPlist(binary))
         yield* Effect.logInfo(`Wrote ${LAUNCHD_PLIST_PATH}`)
 
-        const domain = launchdDomain()
+        const domain = yield* launchdDomain()
         yield* runCmd(['launchctl', 'bootout', domain, LAUNCHD_PLIST_PATH], { capture: true })
         yield* runCmd(['launchctl', 'bootstrap', domain, LAUNCHD_PLIST_PATH], {
           failOnNonZero: true,
@@ -187,21 +225,33 @@ const platformCommands: Record<Platform, PlatformCommands> = {
         yield* Effect.logInfo(`Service installed and started.`)
       }),
     uninstall: Effect.gen(function*() {
-      yield* runCmd(['launchctl', 'bootout', launchdDomain(), LAUNCHD_PLIST_PATH], {
+      const domain = yield* launchdDomain()
+
+      yield* runCmd(['launchctl', 'bootout', domain, LAUNCHD_PLIST_PATH], {
         capture: true,
       })
       yield* removeFile(LAUNCHD_PLIST_PATH)
     }),
-    start: runCmd(['launchctl', 'kickstart', '-k', launchdService()], {
-      failOnNonZero: true,
-    }).pipe(Effect.asVoid),
-    stop: runCmd(['launchctl', 'kill', 'TERM', launchdService()], {
-      failOnNonZero: true,
-    }).pipe(Effect.asVoid),
-    restart: runCmd(['launchctl', 'kickstart', '-k', launchdService()], {
-      failOnNonZero: true,
-    }).pipe(Effect.asVoid),
-    status: runCmd(['launchctl', 'print', launchdService()]).pipe(Effect.asVoid),
+    start: Effect.gen(function*() {
+      const service = yield* launchdService()
+
+      yield* runCmd(['launchctl', 'kickstart', '-k', service], { failOnNonZero: true })
+    }),
+    stop: Effect.gen(function*() {
+      const service = yield* launchdService()
+
+      yield* runCmd(['launchctl', 'kill', 'TERM', service], { failOnNonZero: true })
+    }),
+    restart: Effect.gen(function*() {
+      const service = yield* launchdService()
+
+      yield* runCmd(['launchctl', 'kickstart', '-k', service], { failOnNonZero: true })
+    }),
+    status: Effect.gen(function*() {
+      const service = yield* launchdService()
+
+      yield* runCmd(['launchctl', 'print', service])
+    }),
     logs: (opts) => {
       const args = ['tail']
 
